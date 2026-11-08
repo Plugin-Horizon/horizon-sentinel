@@ -1,0 +1,214 @@
+[mod]
+id = "sentinel"
+version = "0.1.0"
+priority = 100
+
+# Written blind (no build yet) against this commit.
+[compatibility]
+horizon_revision = "b13dbf0687b545431172466ab4b91d19c3976405"
+
+# The trait-mod half: the bridge to the NPC library (horizon-citizens) and the trait's
+# load/save in Citizens' saves.yml.
+[api]
+path = "bridge"
+
+[dependencies]
+citizens = "^0.1"
+
+# The logic, free of the game: target lists, saved trait data, damage rules, the update loop,
+# `/sentinel`. horizon-client-lib depends on it; the lib module below re-exports it, so the game
+# (horizon-client) and an NPC library reach it as `horizon_client::sentinel::core`.
+[[crate]]
+id = "core"
+path = "core"
+dependent = "horizon-client-lib"
+
+# `horizon_client::sentinel`: the core re-exported, the NPC library's bridge slot, the entity
+# view cache and the goal that walks, turns and swings a Sentinel body.
+[[module]]
+id = "lib"
+file = "crates/horizon-client/src/client_lib.rs"
+name = "sentinel"
+source = "modules/sentinel_lib.rs"
+visibility = "pub"
+
+# `crate::game::sentinel_host`: the core's `World` over `Game`, the views, `/sentinel`.
+[[module]]
+id = "host"
+file = "crates/horizon-client/src/game.rs"
+name = "sentinel_host"
+source = "modules/sentinel_host.rs"
+
+# config/sentinel-common.toml, written from the default when missing, read again on change.
+[[injection]]
+id = "config-register"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_register_configs"
+helper = "helpers/cfg_register.rs"
+bindings = [
+  { name = "configs", ty = "&mut Vec<crate::game::native_configs::NativeConfig>", value = "&mut *configs" },
+]
+
+[[injection]]
+id = "config-loading"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_config_loading"
+helper = "helpers/cfg_load.rs"
+bindings = [
+  { name = "config", ty = "&crate::game::native_configs::NativeConfigFile", value = "config" },
+]
+
+[[injection]]
+id = "config-reloading"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_config_reloading"
+helper = "helpers/cfg_load.rs"
+bindings = [
+  { name = "config", ty = "&crate::game::native_configs::NativeConfigFile", value = "config" },
+]
+
+# Each level's tick, after its entities: tick counts and the updates of the Sentinels in it.
+[[injection]]
+id = "level-tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_level_tick_post"
+helper = "helpers/level_tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "dimension", ty = "&str", value = "dimension" },
+]
+
+# The server's tick: respawn timers.
+[[injection]]
+id = "server-tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_server_tick"
+helper = "helpers/server_tick.rs"
+bindings = [
+  { name = "phase", ty = "&horizon_client::mod_api::ServerTickPhase", value = "&phase" },
+]
+
+# Hits on and by Sentinels (protection, armor, fire limit, damage override, fightback, safe shot).
+# living_incoming_damage_v3 (pending API fragment; needs "hooks": @API:living_incoming_damage_v3@
+# once stamped) names the causing entity of every hit, so no 500 ms matching of earlier blows.
+[[injection]]
+id = "damage"
+target = "horizon_client::game::native_hooks::Game<'_>::native_living_incoming_damage_v3"
+kind = "HEAD"
+helper = "helpers/damage.rs"
+bindings = [
+  { name = "victim", ty = "u32", value = "victim" },
+  { name = "attacker", ty = "Option<u32>", value = "attacker" },
+  { name = "damage_type", ty = "&str", value = "damage_type" },
+  { name = "amount", ty = "&mut f32", value = "&mut *amount" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *cancel" },
+]
+
+# The armor rule: what the health loses after vanilla's armor is Sentinel's amount
+# (pending API fragment living_damage; needs "hooks": @API:living_damage@ once stamped).
+[[injection]]
+id = "damage-pre"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_living_damage_pre"
+helper = "helpers/damage_pre.rs"
+bindings = [
+  { name = "entity", ty = "i32", value = "entity" },
+  { name = "amount", ty = "&mut f32", value = "&mut *amount" },
+]
+
+# `allow knockback` off.
+[[injection]]
+id = "knockback"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_living_knockback"
+helper = "helpers/knockback.rs"
+bindings = [
+  { name = "entity", ty = "i32", value = "entity" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+# Deaths: a Sentinel's own (drops, xp, respawn) and its enemies'.
+[[injection]]
+id = "death"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_living_death"
+helper = "helpers/death.rs"
+bindings = [
+  { name = "entity", ty = "u32", value = "entity" },
+]
+
+[[injection]]
+id = "loot"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_loot_drops"
+helper = "helpers/loot.rs"
+bindings = [
+  { name = "context", ty = "&horizon_client::mod_api::NativeLootDrops<'_>", value = "context" },
+  { name = "drops", ty = "&mut Vec<horizon_client::items::ItemStack>", value = "&mut *drops" },
+]
+
+[[injection]]
+id = "leave"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_entity_leave_level"
+helper = "helpers/leave.rs"
+bindings = [
+  { name = "entity", ty = "u32", value = "entity" },
+]
+
+[[injection]]
+id = "register-commands"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_register_commands"
+helper = "helpers/register_commands.rs"
+bindings = [
+  { name = "commands", ty = "&mut Vec<horizon_client::mod_api::NativeCommand>", value = "&mut *commands" },
+]
+
+[[injection]]
+id = "perform-command"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_perform_command"
+helper = "helpers/perform_command.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "player", ty = "&horizon_client::mod_api::NativeServerPlayer", value = "player" },
+  { name = "command", ty = "&str", value = "command" },
+  { name = "ran", ty = "&mut bool", value = "&mut *ran" },
+]
+
+[[injection]]
+id = "console-command"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_perform_console_command"
+helper = "helpers/console_command.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "command", ty = "&str", value = "command" },
+  { name = "ran", ty = "&mut bool", value = "&mut *ran" },
+]
+
+# `event:message:<text>` targets (the chat hook is a free function of horizon-client-lib).
+[[injection]]
+id = "chat"
+kind = "HEAD"
+target = "horizon_client_lib::lan::hub::chat::native_player_chat"
+helper = "helpers/chat.rs"
+bindings = [
+  { name = "player", ty = "u128", value = "player" },
+  { name = "message", ty = "&str", value = "message" },
+]
+
+# Completions of the target argument of addtarget / removetarget and their ignore and avoid forms.
+[[injection]]
+id = "tab-complete"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_tab_complete_v2"
+helper = "helpers/tab_complete.rs"
+bindings = [
+  { name = "player", ty = "u128", value = "player" },
+  { name = "label", ty = "&str", value = "label" },
+  { name = "arguments", ty = "&[String]", value = "arguments" },
+  { name = "range", ty = "[usize; 2]", value = "range" },
+  { name = "suggestions", ty = "&mut Vec<horizon_client::mod_api::Suggestion>", value = "suggestions" },
+]

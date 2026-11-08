@@ -1,0 +1,12 @@
+[package]
+name = "sentinel-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Sentinel combat NPC logic (targets, ignores, damage, respawn) without the game: the native mod's helpers call it"
+
+[dependencies]
+# Both are in Horizon's Cargo.lock at the pinned commit.
+regex = "1.13"
+toml = "1.1"
+serde_json = "1"
