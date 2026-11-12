@@ -2,7 +2,7 @@ id = "sentinel"
 name = "Sentinel"
 version = "0.1.0"
 description = "Combat NPCs for Citizens: targets, ignores, damage, respawn and /sentinel (Sentinel by mcmonkey, MIT)."
-authors = ["CoreSMP"]
+authors = ["Plugin-Horizon contributors"]
 api = "0.2"
 capabilities = ["registries"]
 [dependencies]
