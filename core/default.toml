@@ -1,0 +1,71 @@
+# Sentinel for Horizon. Keys follow Sentinel's config.yml, with dashes for spaces.
+# Times are in ticks (20 = one second), as in Sentinel's file.
+
+# Ticks between two updates of every Sentinel NPC (target search, attacks, healing).
+update-rate = 10
+
+# What a Sentinel trait starts with when it is added to an NPC. NPCs that already have
+# the trait keep their own values (saved with the NPC).
+[defaults]
+close-chase-target = true
+ranged-chase-target = false
+# -1 = from the held weapon.
+damage = -1.0
+# -1 = from the worn armor; 0.0 .. 1.0 = share of damage blocked.
+armor = -1.0
+health = 20.0
+invincible = false
+attack-rate = 30
+heal-rate = 100
+# Damage from ignored entities is cancelled.
+protected = true
+protect-from-range = 0.0
+fightback = true
+needs-ammo = false
+safe-shot = true
+# 0 = stay dead, -1 = delete the NPC on death.
+respawn-time = 100
+enemy-drops = false
+enemy-target-time = 6000
+speed = 1.5
+autoswitch = false
+accuracy = 0.0
+realistic = false
+reach = 4.5
+projectile-range = 100.0
+avoid-range = 10.0
+runaway = false
+greet-range = 10.0
+greet-rate = 100
+reaction-slowdown = 0
+allow-knockback = true
+death-xp = 0
+
+[random]
+run-away-time = 1200
+spectral-sound = "minecraft:entity.villager.yes"
+workaround-damage = false
+do-native-attacks = true
+workaround-drops = false
+workaround-bukkit-events = false
+workaround-entity-chase-pathfinder = true
+death-messages = false
+shoot-speed-minimum = 20
+enforce-damage = false
+skull-allowed = true
+clever-ticks = 10
+ignore-invisible-targets = true
+no-guard-damage = true
+enhance-los-traces = true
+arrow-cleanup-time = 200
+block-sunburn = true
+retain-target = false
+prevent-explosion-block-damage = true
+auto-correct-pathfinder-mode = true
+allow-armor-stand-targets = false
+# Server-wide "protected" (every Sentinel ignores damage from its ignore list).
+protected = false
+
+[random.guard-follow-distance]
+selection-range = 4.0
+minimum = 7.0
