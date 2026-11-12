@@ -63,20 +63,19 @@ impl Registry {
 
     /// `onAttach`: `/trait sentinel` on an NPC.
     pub fn attach(&mut self, npc: NpcId) -> &mut Sentinel {
-        let r = &self.cfg.random;
-        let data = SentinelData::from_defaults(&self.cfg.defaults, r.retain_target, r.guard_minimum, r.guard_selection_range);
+        let data = SentinelData::from_defaults(&self.cfg);
         self.sentinels.entry(npc).or_insert(Sentinel { npc, data, rt: Runtime::new(), body: None })
     }
 
     /// `load`: the trait subtree from the NPC's saves.
     pub fn load(&mut self, npc: NpcId, node: &Node) {
-        let data = SentinelData::load(node);
+        let data = SentinelData::load(node, &self.cfg);
         self.sentinels.insert(npc, Sentinel { npc, data, rt: Runtime::new(), body: None });
     }
 
     /// `save`.
     pub fn save(&self, npc: NpcId) -> Option<Node> {
-        self.sentinels.get(&npc).map(|s| s.data.save())
+        self.sentinels.get(&npc).map(|s| s.data.save(&self.cfg))
     }
 
     /// `onRemove`: the trait is taken off (`/trait remove sentinel`).

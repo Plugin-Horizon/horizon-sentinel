@@ -2,7 +2,9 @@
 //! TOML, `config/sentinel-common.toml`. Keys keep Sentinel's names with dashes for spaces.
 //! [`Config::from_sentinel_yaml`] reads an existing Sentinel `config.yml` for a move.
 
-use crate::node::{parse_yaml, Node};
+use crate::yaml;
+use std::cell::RefCell;
+use std::collections::BTreeSet;
 
 /// `sentinel defaults`: what a newly added trait starts with.
 #[derive(Clone, Debug, PartialEq)]
@@ -51,19 +53,19 @@ impl Default for Defaults {
             invincible: false,
             attack_rate: 30,
             heal_rate: 100,
-            protected: false,
+            protected: true,
             protect_from_range: 0.0,
             fightback: true,
             needs_ammo: false,
             safe_shot: true,
             respawn_time: 100,
             enemy_drops: false,
-            enemy_target_time: 0,
+            enemy_target_time: 6000,
             speed: 1.5,
             autoswitch: false,
             accuracy: 0.0,
             realistic: false,
-            reach: 3.0,
+            reach: 4.5,
             projectile_range: 100.0,
             avoid_range: 10.0,
             runaway: false,
@@ -117,7 +119,7 @@ impl Default for Random {
             workaround_drops: false,
             workaround_bukkit_events: false,
             workaround_entity_chase_pathfinder: true,
-            death_messages: true,
+            death_messages: false,
             shoot_speed_minimum: 20,
             enforce_damage: false,
             skull_allowed: true,
@@ -193,7 +195,12 @@ impl Source for Toml {
     }
 }
 
-struct Yaml(Node);
+/// Sentinel's own `config.yml` (vendored YAML). Records every key it asks for, so a checker can
+/// list the keys of a file that the loader never reads.
+struct Yaml {
+    node: yaml::Node,
+    read: RefCell<BTreeSet<String>>,
+}
 
 impl Yaml {
     fn path(section: &str, key: &str) -> String {
@@ -205,15 +212,24 @@ impl Yaml {
     }
 }
 
+impl Yaml {
+    /// The node at `section.key` (recorded as read), if the file has it.
+    fn at(&self, section: &str, key: &str) -> Option<&yaml::Node> {
+        let path = Yaml::path(section, key);
+        self.read.borrow_mut().insert(path.clone());
+        self.node.path(&path)
+    }
+}
+
 impl Source for Yaml {
     fn f(&self, section: &str, key: &str) -> Option<f64> {
-        self.0.f64(&Yaml::path(section, key))
+        self.at(section, key)?.as_f64()
     }
     fn b(&self, section: &str, key: &str) -> Option<bool> {
-        self.0.bool(&Yaml::path(section, key))
+        self.at(section, key)?.as_bool()
     }
     fn s(&self, section: &str, key: &str) -> Option<String> {
-        self.0.str(&Yaml::path(section, key)).map(str::to_owned)
+        self.at(section, key)?.as_str().map(str::to_owned)
     }
 }
 
@@ -315,11 +331,20 @@ impl Config {
         Ok(Config::read(&Toml(table)))
     }
 
-    /// Reads Sentinel's own `config.yml`.
+    /// Reads Sentinel's own `config.yml` (the server's `plugins/Sentinel/config.yml`); a missing
+    /// key keeps its default.
     pub fn from_sentinel_yaml(text: &str) -> Result<Self, String> {
-        let node = parse_yaml(text).map_err(|e| e.to_string())?;
-        Ok(Config::read(&Yaml(node)))
+        read_sentinel_yaml(text).map(|(cfg, _)| cfg)
     }
+}
+
+/// Reads Sentinel's `config.yml` and also returns the key paths the loader asked for (for
+/// `examples/check_original.rs`: a key of the file that is not in this set is not read).
+pub fn read_sentinel_yaml(text: &str) -> Result<(Config, BTreeSet<String>), String> {
+    let node = yaml::parse(text).map_err(|e| e.to_string())?;
+    let src = Yaml { node, read: RefCell::new(BTreeSet::new()) };
+    let cfg = Config::read(&src);
+    Ok((cfg, src.read.into_inner()))
 }
 
 #[cfg(test)]
@@ -354,5 +379,43 @@ update rate: 10
         assert_eq!(c.random.guard_minimum, 7.0);
         assert_eq!(c.random.spectral_sound, "minecraft:entity.villager.yes");
         assert_eq!(c.update_rate, 10);
+    }
+
+    #[test]
+    fn missing_keys_keep_the_shipped_defaults() {
+        let c = Config::from_sentinel_yaml("update rate: 5\n").unwrap();
+        assert_eq!(c, Config { update_rate: 5, ..Config::default() });
+        assert_eq!(c.defaults.enemy_target_time, 6000);
+        assert!(c.defaults.protected);
+        assert!(!c.random.death_messages);
+    }
+
+    #[test]
+    fn reports_the_keys_it_reads() {
+        let yaml = "\
+sentinel defaults:
+    reach: 4.5
+    close chase target: true
+random:
+    guard follow distance:
+        minimum: 7
+update rate: 10
+";
+        let (_, read) = read_sentinel_yaml(yaml).unwrap();
+        for key in [
+            "sentinel defaults.reach",
+            "sentinel defaults.close chase target",
+            "sentinel defaults.speed",
+            "random.guard follow distance.minimum",
+            "update rate",
+        ] {
+            assert!(read.contains(key), "{key} not read: {read:?}");
+        }
+        assert!(!read.contains("sentinel defaults.not a key"));
+    }
+
+    #[test]
+    fn a_broken_file_is_an_error() {
+        assert!(Config::from_sentinel_yaml("sentinel defaults:\n  reach: 'open\n").is_err());
     }
 }

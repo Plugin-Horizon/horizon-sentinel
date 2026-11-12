@@ -1,17 +1,22 @@
 # horizon-sentinel
 
-> **Unofficial Rust port of Sentinel for the Horizon server (https://github.com/horizon-rust/horizon). Not affiliated with or endorsed by the Sentinel authors.**
+> **Unofficial Rust port of Sentinel for the Horizon server (https://github.com/arismoko/horizon). Not affiliated with or endorsed by the Sentinel authors.**
 
-Combat NPCs for [Horizon](https://github.com/horizon-rust/horizon) servers, as a native mod: a
+Combat NPCs for [Horizon](https://github.com/arismoko/horizon) servers, as a native mod: a
 Rust rebuild of the Bukkit plugin [Sentinel](https://github.com/mcmonkeyprojects/Sentinel) on top
 of a Horizon NPC library. **Not affiliated with Sentinel, its author, or Citizens.**
 
 Derived from Sentinel (https://github.com/mcmonkeyprojects/Sentinel, MIT; see [NOTICE](NOTICE)).
 
-**State: written blind.** The logic (`core/`) built and its tests passed before the commands, target
-prefixes and tab completion were reworked from Sentinel's source (not compiled since); the game glue has not been
-applied or compiled yet. See [STATUS.md](STATUS.md) for every feature and [GAPS.md](GAPS.md) for
-what Horizon still lacks.
+> **Built for and working only with [arismoko/horizon](https://github.com/arismoko/horizon)** (the Horizon fork that carries the mod API). [horizon-rust/horizon](https://github.com/horizon-rust/horizon) is experimental for mods and not supported: the earlier version for its native hooks / horizon-mixins is frozen on the `horizon-plain` branch (work stopped on 2026-11-12).
+
+## Which Horizon
+
+This is a native trait mod: `horizon-mod.toml`, a `Cargo.toml` that depends on `horizon-mod-api`, `src/lib.rs` with the hooks, and the plugin logic in the `core/` crate (plain Rust, no engine needed for its tests).
+
+- Pin: `[native] horizon = "54090ee36c4e2c7b43b66db864220c577b94b7e0"` in `horizon-mod.toml` (game `26.3`). That is a development build of arismoko/horizon `main` plus mod API additions that are not all merged upstream yet, so a stock `main` may lack some host methods this mod calls until they land.
+- It compiled and loaded on that build and was smoke-tested there; it has not seen a long run with real players. Treat it as experimental.
+- Feature descriptions below were written for the earlier horizon-rust version; where they name engine calls (`native_*`) or old file paths, read them as descriptions only. The Known gaps list is current.
 
 ## What it does
 
@@ -35,14 +40,6 @@ An NPC with the `sentinel` trait guards, hunts and fights:
 Saved data stays where Citizens keeps it (`npc.<id>.traits.sentinel` in `saves.yml`), with the
 same keys, so a server can move between Paper and Horizon with its NPCs.
 
-## Needs
-
-horizon-citizens (mod id `citizens`, a required dependency): Sentinel's
-`bridge/` package implements `sentinel_core::npc::NpcBridge` over its `api` and keeps the trait in
-its `saves.yml`. Another NPC library can install its own bridge with
-`horizon_client::sentinel::install_bridge`. What horizon-citizens' API still lacks is at the end of
-[GAPS.md](GAPS.md).
-
 ## Config
 
 `config/sentinel-common.toml`, written with defaults when missing and read again within a second
@@ -50,30 +47,29 @@ of a save. It holds Sentinel's `config.yml` sections (`[defaults]` = `sentinel d
 `[random]`, `update-rate`) with dashes for spaces. `Config::from_sentinel_yaml` reads an existing
 `config.yml`.
 
-## Layout
-
-| Path | What |
-|---|---|
-| `core/` | The logic, no game dependency: `list` (targets), `data` (saved trait), `combat`, `brain` (one NPC's update), `registry` (all NPCs, hits, deaths), `commands`, `config`, `node` (Citizens' YAML tree) |
-| `modules/sentinel_lib.rs` | `horizon_client::sentinel`: core re-export, bridge slot, view cache, the goal that moves and swings a body |
-| `modules/sentinel_host.rs` | `crate::game::sentinel_host`: the core's `World` over Horizon's `Game` |
-| `bridge/` | The trait-mod half (`[api]`): the bridge to horizon-citizens, trait load and save |
-| `helpers/` | One HEAD injection each: level and server tick, damage, knockback, death, loot, commands, chat, config |
-| `horizon-mixin.toml` | The bundle, pinned to Horizon a589a3dd9 |
-
 ## Build
 
-The core alone: `cargo test` in `core/` (crates: `regex`, `toml`, both in Horizon's `Cargo.lock`).
+Build it as a native trait mod with arismoko's launcher (see the "native mods" how-to in the arismoko/horizon docs):
 
-The mod: with the Horizon launcher (`horizon-launcher native-build <this folder> --server-output DIR`)
-or `horizon-mixins apply` on an exported Horizon source, then build the server. Untested.
+```sh
+horizon-launcher native-build <path to this folder> --server-output <dir> --version <tag> --trust-native-code
+```
+
+`--trust-native-code` is your consent to compile and run this code inside the server. The logic crate tests run without the engine: `(cd core && cargo test)`.
+
+## Known gaps
+
+What does not work yet on arismoko/horizon (each is marked `TODO(arismoko-api: ...)` in `src/lib.rs`):
+
+- Custom names, lore and enchantment levels are not read, so weapon rules do not see them.
+- Mannequin NPC bodies cannot path-find, follow or turn to their target: they walk to the target's position each tick.
+- Shield raising, the vanilla attack of the body and visual-only lightning are not available.
+- An NPC's own inventory is not exposed by Citizens yet, so auto-switching finds nothing; potions' contents are not copied.
+- Experience drops, the hidden death message and custom drop stacks are not applied.
+- Needs the arismoko `citizens` mod (see `horizon-citizens`).
 
 ## Licence
 
 MIT, see [LICENSE](LICENSE). Sentinel is MIT-licensed (Copyright (c) 2019-2022 Alex "mcmonkey"
 Goodwin); its source was read and parts of it are translated here, so its notice is kept in
 LICENSE. Citizens' source was not used.
-
-## Contributing
-
-Pull requests and improvements are always welcome! Open an issue or a PR -- direct pushes to main are disabled, every change goes through review.

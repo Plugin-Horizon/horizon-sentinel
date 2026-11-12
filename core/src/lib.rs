@@ -18,6 +18,7 @@ pub mod registry;
 pub mod target;
 pub mod view;
 pub mod world;
+pub mod yaml;
 
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -41,6 +42,14 @@ pub fn registry() -> MutexGuard<'static, Registry> {
 /// Reads `sentinel-common.toml` (on load and on every change); a broken file keeps the old one.
 pub fn load_config(text: &str) -> Result<(), String> {
     let cfg = Config::from_toml(text)?;
+    registry().cfg = cfg;
+    Ok(())
+}
+
+/// Reads Sentinel's original `plugins/Sentinel/config.yml`; a broken file keeps the old config.
+/// Used instead of `sentinel-common.toml` when the original file is there.
+pub fn load_sentinel_yaml(text: &str) -> Result<(), String> {
+    let cfg = Config::from_sentinel_yaml(text)?;
     registry().cfg = cfg;
     Ok(())
 }

@@ -2,10 +2,12 @@
 //! written to the Citizens trait subtree (`npc.<id>.traits.sentinel`) with the same keys.
 //!
 //! Times are in ticks, as saved (the commands take seconds). A key missing from the file reads as
-//! the Java field's initial value, as Citizens' `PersistenceLoader` does; a freshly added trait
-//! takes the config's `sentinel defaults` instead ([`SentinelData::from_defaults`]).
+//! the loaded config's `sentinel defaults` (the value Sentinel's `config.yml` gives, as the Java
+//! plugin reads it for a trait without that key). A freshly added trait starts with the same
+//! values ([`SentinelData::from_defaults`]). [`SentinelData::save`] writes the keys the Java plugin
+//! writes: the stats and target lists always, every other key only when it differs from the config.
 
-use crate::config::Defaults;
+use crate::config::Config;
 use crate::list::TargetList;
 use crate::node::Node;
 use std::collections::BTreeMap;
@@ -229,9 +231,12 @@ const KNOWN: &[&str] = &[
 ];
 
 impl SentinelData {
-    /// A new trait (`onAttach`): the config's defaults, and the owner ignored.
-    pub fn from_defaults(d: &Defaults, retain_target: bool, guard_min: f64, guard_select: f64) -> Self {
-        let mut s = SentinelData {
+    /// The config's defaults for a trait: what a new trait starts with, and what a key missing
+    /// from the saved data reads as. Fields that the config does not have keep the Java values.
+    pub fn config_defaults(cfg: &Config) -> Self {
+        let d = &cfg.defaults;
+        let r = &cfg.random;
+        SentinelData {
             attack_rate: d.attack_rate,
             heal_rate: d.heal_rate,
             respawn_time: d.respawn_time,
@@ -255,14 +260,19 @@ impl SentinelData {
             runaway: d.runaway,
             greet_range: d.greet_range,
             greet_rate: d.greet_rate,
-            retain_target,
+            retain_target: r.retain_target,
             reaction_slowdown: d.reaction_slowdown,
             death_xp: d.death_xp,
             allow_knockback: d.allow_knockback,
-            guard_distance_minimum: guard_min,
-            guard_selection_range: guard_select,
+            guard_distance_minimum: r.guard_minimum,
+            guard_selection_range: r.guard_selection_range,
             ..SentinelData::default()
-        };
+        }
+    }
+
+    /// A new trait (`onAttach`): the config's defaults, and the owner ignored.
+    pub fn from_defaults(cfg: &Config) -> Self {
+        let mut s = Self::config_defaults(cfg);
         s.all_ignores.targets.push(crate::target::OWNER.to_owned());
         s
     }
@@ -289,9 +299,9 @@ impl SentinelData {
         }
     }
 
-    /// Reads the trait subtree (`load` + `updateOld`).
-    pub fn load(node: &Node) -> Self {
-        let d = SentinelData::default();
+    /// Reads the trait subtree (`load` + `updateOld`); a missing key reads as the config's default.
+    pub fn load(node: &Node, cfg: &Config) -> Self {
+        let d = SentinelData::config_defaults(cfg);
         let f = |k: &str, def: f64| node.f64(k).unwrap_or(def);
         let i = |k: &str, def: i64| node.i64(k).unwrap_or(def);
         let b = |k: &str, def: bool| node.bool(k).unwrap_or(def);
@@ -420,9 +430,11 @@ impl SentinelData {
         }
     }
 
-    /// Writes the trait subtree in the field order Citizens uses. Every field is written
-    /// (Citizens writes them all); the old 1.x keys are not.
-    pub fn save(&self) -> Node {
+    /// Writes the trait subtree. The stats and both target lists are always written, as Sentinel
+    /// does; every other key only when it differs from the config's default (a key left out reads
+    /// back as that default, see [`SentinelData::load`]). The old 1.x keys are not written.
+    pub fn save(&self, cfg: &Config) -> Node {
+        let d = SentinelData::config_defaults(cfg);
         let mut n = Node::map();
         let st = &self.stats;
         for (k, v) in [
@@ -447,32 +459,46 @@ impl SentinelData {
         n.set("stats_damageGiven", Node::double(st.damage_given));
         n.set("allTargets", self.all_targets.save());
         n.set("allIgnores", self.all_ignores.save());
-        n.set("allAvoids", self.all_avoids.save());
-        let num = |n: &mut Node, k: &str, v: f64| n.set(k, Node::double(v));
-        let int = |n: &mut Node, k: &str, v: i64| n.set(k, Node::scalar(v));
-        let flag = |n: &mut Node, k: &str, v: bool| n.set(k, Node::scalar(v));
-        num(&mut n, "avoidRange", self.avoid_range);
-        num(&mut n, "range", self.range);
-        num(&mut n, "damage", self.damage);
-        num(&mut n, "armor", self.armor);
-        num(&mut n, "health", self.health);
-        flag(&mut n, "ranged_chase", self.ranged_chase);
-        flag(&mut n, "close_chase", self.close_chase);
-        flag(&mut n, "invincible", self.invincible);
-        flag(&mut n, "protected", self.protect_from_ignores);
-        num(&mut n, "protectFromRange", self.protect_from_range);
-        flag(&mut n, "fightback", self.fightback);
-        flag(&mut n, "runaway", self.runaway);
-        int(&mut n, "attackRate", self.attack_rate);
-        int(&mut n, "attackRateRanged", self.attack_rate_ranged);
-        int(&mut n, "healRate", self.heal_rate);
-        int(&mut n, "guardingUpper", self.guarding_upper);
-        int(&mut n, "guardingLower", self.guarding_lower);
-        int(&mut n, "guardedNPC", i64::from(self.guarded_npc));
-        flag(&mut n, "needsAmmo", self.needs_ammo);
-        flag(&mut n, "safeShot", self.safe_shot);
-        int(&mut n, "respawnTime", self.respawn_time);
-        num(&mut n, "chaseRange", self.chase_range);
+        if self.all_avoids != TargetList::default() {
+            n.set("allAvoids", self.all_avoids.save());
+        }
+        let num = |n: &mut Node, k: &str, v: f64, dv: f64| {
+            if v != dv {
+                n.set(k, Node::double(v));
+            }
+        };
+        let int = |n: &mut Node, k: &str, v: i64, dv: i64| {
+            if v != dv {
+                n.set(k, Node::scalar(v));
+            }
+        };
+        let flag = |n: &mut Node, k: &str, v: bool, dv: bool| {
+            if v != dv {
+                n.set(k, Node::scalar(v));
+            }
+        };
+        num(&mut n, "avoidRange", self.avoid_range, d.avoid_range);
+        num(&mut n, "range", self.range, d.range);
+        num(&mut n, "damage", self.damage, d.damage);
+        num(&mut n, "armor", self.armor, d.armor);
+        num(&mut n, "health", self.health, d.health);
+        flag(&mut n, "ranged_chase", self.ranged_chase, d.ranged_chase);
+        flag(&mut n, "close_chase", self.close_chase, d.close_chase);
+        flag(&mut n, "invincible", self.invincible, d.invincible);
+        flag(&mut n, "protected", self.protect_from_ignores, d.protect_from_ignores);
+        num(&mut n, "protectFromRange", self.protect_from_range, d.protect_from_range);
+        flag(&mut n, "fightback", self.fightback, d.fightback);
+        flag(&mut n, "runaway", self.runaway, d.runaway);
+        int(&mut n, "attackRate", self.attack_rate, d.attack_rate);
+        int(&mut n, "attackRateRanged", self.attack_rate_ranged, d.attack_rate_ranged);
+        int(&mut n, "healRate", self.heal_rate, d.heal_rate);
+        int(&mut n, "guardingUpper", self.guarding_upper, d.guarding_upper);
+        int(&mut n, "guardingLower", self.guarding_lower, d.guarding_lower);
+        int(&mut n, "guardedNPC", i64::from(self.guarded_npc), i64::from(d.guarded_npc));
+        flag(&mut n, "needsAmmo", self.needs_ammo, d.needs_ammo);
+        flag(&mut n, "safeShot", self.safe_shot, d.safe_shot);
+        int(&mut n, "respawnTime", self.respawn_time, d.respawn_time);
+        num(&mut n, "chaseRange", self.chase_range, d.chase_range);
         if let Some(l) = &self.spawn_point {
             n.set("spawnPoint", l.save());
         }
@@ -485,25 +511,29 @@ impl SentinelData {
         if !self.drop_chances.is_empty() {
             n.set("dropChances", Node::List(self.drop_chances.iter().map(|c| Node::double(*c)).collect()));
         }
-        flag(&mut n, "enemyDrops", self.enemy_drops);
-        int(&mut n, "enemyTargetTime", self.enemy_target_time);
-        num(&mut n, "speed", self.speed);
-        n.set("warning_text", Node::string(&self.warning_text));
-        n.set("greeting_text", Node::string(&self.greeting_text));
-        num(&mut n, "greet_range", self.greet_range);
-        int(&mut n, "greet_rate", self.greet_rate);
-        flag(&mut n, "autoswitch", self.autoswitch);
+        flag(&mut n, "enemyDrops", self.enemy_drops, d.enemy_drops);
+        int(&mut n, "enemyTargetTime", self.enemy_target_time, d.enemy_target_time);
+        num(&mut n, "speed", self.speed, d.speed);
+        if self.warning_text != d.warning_text {
+            n.set("warning_text", Node::string(&self.warning_text));
+        }
+        if self.greeting_text != d.greeting_text {
+            n.set("greeting_text", Node::string(&self.greeting_text));
+        }
+        num(&mut n, "greet_range", self.greet_range, d.greet_range);
+        int(&mut n, "greet_rate", self.greet_rate, d.greet_rate);
+        flag(&mut n, "autoswitch", self.autoswitch, d.autoswitch);
         if let Some(q) = &self.squad {
             n.set("squad", Node::string(q));
         }
-        num(&mut n, "accuracy", self.accuracy);
-        flag(&mut n, "realistic", self.realistic);
-        flag(&mut n, "ignore_los", self.ignore_los);
-        num(&mut n, "reach", self.reach);
-        num(&mut n, "projectileRange", self.projectile_range);
-        num(&mut n, "guard_distance_minimum", self.guard_distance_minimum);
-        num(&mut n, "guard_selection_range", self.guard_selection_range);
-        flag(&mut n, "retain_target", self.retain_target);
+        num(&mut n, "accuracy", self.accuracy, d.accuracy);
+        flag(&mut n, "realistic", self.realistic, d.realistic);
+        flag(&mut n, "ignore_los", self.ignore_los, d.ignore_los);
+        num(&mut n, "reach", self.reach, d.reach);
+        num(&mut n, "projectileRange", self.projectile_range, d.projectile_range);
+        num(&mut n, "guard_distance_minimum", self.guard_distance_minimum, d.guard_distance_minimum);
+        num(&mut n, "guard_selection_range", self.guard_selection_range, d.guard_selection_range);
+        flag(&mut n, "retain_target", self.retain_target, d.retain_target);
         if !self.weapon_damage.is_empty() {
             n.set(
                 "weapon_damage_map",
@@ -516,13 +546,13 @@ impl SentinelData {
                 Node::Map(self.weapon_redirects.iter().map(|(k, v)| (k.clone(), Node::string(v))).collect()),
             );
         }
-        flag(&mut n, "disable_teleporting", self.disable_teleporting);
-        int(&mut n, "reaction_slowdown", self.reaction_slowdown);
-        flag(&mut n, "allow_knockback", self.allow_knockback);
+        flag(&mut n, "disable_teleporting", self.disable_teleporting, d.disable_teleporting);
+        int(&mut n, "reaction_slowdown", self.reaction_slowdown, d.reaction_slowdown);
+        flag(&mut n, "allow_knockback", self.allow_knockback, d.allow_knockback);
         if let Some(r) = &self.worldguard_region {
             n.set("worldguard_region", Node::string(r));
         }
-        int(&mut n, "death_xp", self.death_xp);
+        int(&mut n, "death_xp", self.death_xp, d.death_xp);
         for (k, v) in &self.unknown {
             n.set(k, v.clone());
         }
@@ -646,6 +676,7 @@ impl DropItem {
 mod tests {
     use super::*;
     use crate::node::{parse_yaml, to_yaml};
+    use crate::config::Config;
 
     /// The shape of an arena fighter's trait (numbers made up).
     const FIGHTER: &str = "\
@@ -696,26 +727,26 @@ avoidReturnPoint:
 
     #[test]
     fn reads_a_fighter() {
-        let d = SentinelData::load(&parse_yaml(FIGHTER).unwrap());
+        let d = SentinelData::load(&parse_yaml(FIGHTER).unwrap(), &Config::default());
         assert_eq!(d.respawn_time, 0);
         assert_eq!(d.stats.punches, 10);
         assert_eq!(d.all_targets.targets, vec!["NPC"]);
         assert_eq!(d.all_ignores.by_npc_name, vec!["3", "4"]);
         assert_eq!(d.all_ignores.targets, vec!["OWNER"]);
         assert!(d.autoswitch);
-        // Missing keys read as the Java defaults.
+        // Missing keys read as the config's defaults (the shipped config: reach 4.5, speed 1.5).
         assert_eq!(d.health, 20.0);
-        assert_eq!(d.speed, 1.0);
-        assert_eq!(d.reach, 3.0);
+        assert_eq!(d.speed, 1.5);
+        assert_eq!(d.reach, 4.5);
         assert_eq!(d.avoid_return_point.as_ref().unwrap().z, -30.5);
         assert!(d.unknown.is_empty());
     }
 
     #[test]
     fn save_then_load_is_the_same() {
-        let d = SentinelData::load(&parse_yaml(FIGHTER).unwrap());
-        let text = to_yaml(&d.save(), 0);
-        let again = SentinelData::load(&parse_yaml(&text).unwrap());
+        let d = SentinelData::load(&parse_yaml(FIGHTER).unwrap(), &Config::default());
+        let text = to_yaml(&d.save(&Config::default()), 0);
+        let again = SentinelData::load(&parse_yaml(&text).unwrap(), &Config::default());
         assert_eq!(d, again);
         assert!(text.contains("byNpcName:\n  - '3'\n"));
     }
@@ -723,10 +754,10 @@ avoidReturnPoint:
     #[test]
     fn old_layout() {
         let n = parse_yaml("targets:\n- players\nnpcNameIgnores:\n- guard\n").unwrap();
-        let d = SentinelData::load(&n);
+        let d = SentinelData::load(&n, &Config::default());
         assert_eq!(d.all_targets.targets, vec!["PLAYER"]);
         assert_eq!(d.all_ignores.by_npc_name, vec!["guard"]);
-        let saved = d.save();
+        let saved = d.save(&Config::default());
         assert!(saved.get("targets").is_none());
     }
 
@@ -743,18 +774,64 @@ avoidReturnPoint:
     #[test]
     fn doubles_keep_their_decimal_point() {
         // Review S1: `20` / `1` load as Integer on Paper; Sentinel casts these to Double.
-        let mut d = SentinelData::load(&parse_yaml(FIGHTER).unwrap());
+        let mut d = SentinelData::load(&parse_yaml(FIGHTER).unwrap(), &Config::default());
         d.drop_chances = vec![1.0, 0.5];
         d.weapon_damage.insert("diamond_sword".into(), 7.0);
         d.avoid_return_point.as_mut().unwrap().x = 12.0;
         d.avoid_return_point.as_mut().unwrap().yaw = 90.0;
-        let text = to_yaml(&d.save(), 0);
-        for want in ["health: 20.0", "- 1.0", "- 0.5", "diamond_sword: 7.0", "x: 12.0", "yaw: 90.0", "speed: 1.0"] {
+        d.health = 18.0;
+        d.speed = 1.0;
+        let text = to_yaml(&d.save(&Config::default()), 0);
+        for want in ["health: 18.0", "- 1.0", "- 0.5", "diamond_sword: 7.0", "x: 12.0", "yaw: 90.0", "speed: 1.0"] {
             assert!(text.contains(want), "{want} missing in:\n{text}");
         }
         assert!(text.contains("respawnTime: 0\n"), "integers stay integers");
-        let again = SentinelData::load(&parse_yaml(&text).unwrap());
+        let again = SentinelData::load(&parse_yaml(&text).unwrap(), &Config::default());
         assert_eq!(again.drop_chances, vec![1.0, 0.5]);
+    }
+
+    #[test]
+    fn missing_keys_read_as_the_loaded_config() {
+        let mut cfg = Config::default();
+        cfg.defaults.reach = 3.25;
+        cfg.defaults.enemy_target_time = 40;
+        cfg.random.guard_minimum = 9.0;
+        let d = SentinelData::load(&parse_yaml("respawnTime: 0\n").unwrap(), &cfg);
+        assert_eq!(d.reach, 3.25);
+        assert_eq!(d.enemy_target_time, 40);
+        assert_eq!(d.guard_distance_minimum, 9.0);
+        assert!(d.protect_from_ignores, "shipped default: protected");
+        // A key the file has wins over the config.
+        let d = SentinelData::load(&parse_yaml("reach: 5.0\n").unwrap(), &cfg);
+        assert_eq!(d.reach, 5.0);
+    }
+
+    #[test]
+    fn new_trait_starts_with_config_and_owner_ignored() {
+        let mut cfg = Config::default();
+        cfg.defaults.speed = 0.0;
+        let d = SentinelData::from_defaults(&cfg);
+        assert_eq!(d.speed, 1.0, "a speed of 0 becomes the Java value 1.0");
+        assert_eq!(d.all_ignores.targets, vec!["OWNER"]);
+        assert_eq!(d.reach, 4.5);
+    }
+
+    #[test]
+    fn save_writes_only_what_differs_from_the_config() {
+        let cfg = Config::default();
+        let d = SentinelData::load(&parse_yaml(FIGHTER).unwrap(), &cfg);
+        let saved = d.save(&cfg);
+        for key in ["stats_punches", "respawnTime", "allTargets", "allIgnores", "autoswitch", "avoidReturnPoint"] {
+            assert!(saved.get(key).is_some(), "{key} is written");
+        }
+        for key in ["reach", "speed", "protected", "enemyTargetTime", "attackRate", "health", "allAvoids"] {
+            assert!(saved.get(key).is_none(), "{key} equals the config default and is left out");
+        }
+        // Changing the config changes what a left-out key reads as, as in Sentinel.
+        let mut other = cfg.clone();
+        other.defaults.reach = 3.0;
+        let again = SentinelData::load(&saved, &other);
+        assert_eq!(again.reach, 3.0);
     }
 }
 
