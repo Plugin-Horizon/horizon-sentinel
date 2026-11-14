@@ -11,7 +11,7 @@ use citizens::yaml::{Node as CitNode, Style};
 use mod_api::{
     ClipBlock, ClipFluid, Command, CommandArgumentValue, CommandSource, Compound, Config,
     ConfigKind, ConfigLoadingEvent, ConfigReloadingEvent, EntityRef, EquipmentSlot, Flow, Hand,
-    HostSide, Hooks, ItemStack, LevelRandomHost, LevelRef, LevelTickPostEvent,
+    HostSide, Hooks, Identifier, ItemStack, LevelRandomHost, LevelRef, LevelTickPostEvent,
     LivingDamagePreEvent, LivingDeathEvent, LivingDropsEvent, LivingIncomingDamageEvent,
     LivingKnockbackEvent, LivingRef, MobRef, PlayerRef, RegisterCommandsEvent, RegisterConfigsEvent,
     RunModCommandEvent, ServerChatEvent, ServerHost, ServerStoppingEvent, ServerTickEvent,
@@ -636,6 +636,16 @@ impl commands::Lookup for Look<'_> {
         let p = player_by_uuid(self.host, player)?;
         let level = p.permission_level(self.host).unwrap_or(0);
         Some(p.permission_value(self.host, node).unwrap_or(level >= default_level))
+    }
+    /// `Material.valueOf(name.toUpperCase())` succeeds: the name is a bare registry item (`stick`, not
+    /// `minecraft:stick`, which is no Bukkit material name). The host holds the item registry.
+    fn is_material(&self, name: &str) -> bool {
+        !name.is_empty()
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && Identifier::parse(&format!("minecraft:{}", name.to_ascii_lowercase()))
+                .ok()
+                .and_then(|id| self.host.item_key(&id))
+                .is_some()
     }
     fn world_name(&self, dimension: &str) -> String {
         let level = self.level_name.clone();
