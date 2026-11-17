@@ -1,7 +1,7 @@
 //! What a Sentinel needs from the game, for one NPC at a time. The mod's helpers implement it
 //! over Horizon's `Game`; the tests implement it over a small fake world.
 
-use crate::view::{EntityView, Vec3};
+use crate::sentinel_core::view::{EntityView, Vec3};
 
 /// Projectiles a Sentinel can launch (`SentinelWeaponHelper.fire*`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

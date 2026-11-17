@@ -7,9 +7,9 @@
 //! values ([`SentinelData::from_defaults`]). [`SentinelData::save`] writes the keys the Java plugin
 //! writes: the stats and target lists always, every other key only when it differs from the config.
 
-use crate::config::Config;
-use crate::list::TargetList;
-use crate::node::Node;
+use crate::sentinel_core::config::Config;
+use crate::sentinel_core::list::TargetList;
+use crate::sentinel_core::node::Node;
 use std::collections::BTreeMap;
 
 /// A Citizens/Bukkit location (`world`, `worldid`, `x`, `y`, `z`, `yaw`, `pitch`).
@@ -273,7 +273,7 @@ impl SentinelData {
     /// A new trait (`onAttach`): the config's defaults, and the owner ignored.
     pub fn from_defaults(cfg: &Config) -> Self {
         let mut s = Self::config_defaults(cfg);
-        s.all_ignores.targets.push(crate::target::OWNER.to_owned());
+        s.all_ignores.targets.push(crate::sentinel_core::target::OWNER.to_owned());
         s
     }
 
@@ -675,8 +675,8 @@ impl DropItem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::{parse_yaml, to_yaml};
-    use crate::config::Config;
+    use crate::sentinel_core::node::{parse_yaml, to_yaml};
+    use crate::sentinel_core::config::Config;
 
     /// The shape of an arena fighter's trait (numbers made up).
     const FIGHTER: &str = "\

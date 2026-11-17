@@ -4,12 +4,12 @@
 //! the order of `SentinelCommand.onCommand` and Citizens' command manager, and every message is
 //! the original's text.
 
-use crate::data::{Location, SentinelData, ATTACK_RATE_MAX, HEAL_RATE_MAX};
-use crate::list::{parse_uuid, TargetLabel, TargetList};
-use crate::node::java_double;
-use crate::npc::NpcId;
-use crate::registry::Registry;
-use crate::view::EntityView;
+use crate::sentinel_core::data::{Location, SentinelData, ATTACK_RATE_MAX, HEAL_RATE_MAX};
+use crate::sentinel_core::list::{parse_uuid, TargetLabel, TargetList};
+use crate::sentinel_core::node::java_double;
+use crate::sentinel_core::npc::NpcId;
+use crate::sentinel_core::registry::Registry;
+use crate::sentinel_core::view::EntityView;
 
 /// `SentinelCommand.prefixGood` / `prefixBad` / `colorEmphasis` / `colorBasic`.
 const GOOD: &str = "\u{a7}2[Sentinel] \u{a7}e";
@@ -197,7 +197,7 @@ pub const SUBCOMMANDS: &[Sub] = &[
 ];
 
 /// The permission node of a subcommand, as the `permission` of its `@Command` names it.
-fn sub_node(sub: &str) -> String {
+pub fn sub_node(sub: &str) -> String {
     match sub {
         "stats" | "targets" | "ignores" | "avoids" => "sentinel.info".into(),
         "greeting" | "warning" | "greetrange" | "greetrate" => "sentinel.greet".into(),
@@ -590,7 +590,7 @@ pub fn run(reg: &mut Registry, sender: &Sender, args: &str, look: &dyn Lookup) -
             if !has {
                 let calc = if body.is_some() {
                     let worn = body.as_ref().map(|b| b.armor.clone()).unwrap_or_default();
-                    format!("{BASIC} Calculated: {EMPH}{}", java_double(crate::combat::armor(d, &worn)))
+                    format!("{BASIC} Calculated: {EMPH}{}", java_double(crate::sentinel_core::combat::armor(d, &worn)))
                 } else {
                     String::new()
                 };
@@ -1044,7 +1044,7 @@ fn owner_text(look: &dyn Lookup, npc: NpcId) -> String {
 /// NPC (the original does write it, as a side effect of a lookup).
 fn calculated_damage(d: &SentinelData, body: Option<&EntityView>) -> f64 {
     let mut copy = d.clone();
-    crate::combat::damage(&mut copy, true, body.and_then(|b| b.main_hand.as_ref()))
+    crate::sentinel_core::combat::damage(&mut copy, true, body.and_then(|b| b.main_hand.as_ref()))
 }
 
 /// A command that shows, or sets, one number: no argument shows `show: value`, a number that
@@ -1165,7 +1165,7 @@ fn info(out: &mut Outcome, full_name: &str, d: &SentinelData, body: Option<&Enti
     };
     let calc_damage = calculated_damage(d, body);
     let armor = match body {
-        Some(b) => format!("{}{BASIC} Calculated: {EMPH}{}", java_double(d.armor), java_double(crate::combat::armor(d, &b.armor))),
+        Some(b) => format!("{}{BASIC} Calculated: {EMPH}{}", java_double(d.armor), java_double(crate::sentinel_core::combat::armor(d, &b.armor))),
         None => java_double(d.armor),
     };
     let health = match body {
@@ -1285,7 +1285,7 @@ pub fn tab_complete(reg: &Registry, selected: Option<NpcId>, args: &[String]) ->
                 .iter()
                 .map(|p| (*p).to_owned()),
             );
-            all.extend(crate::target::all_accepted_names());
+            all.extend(crate::sentinel_core::target::all_accepted_names());
             Some(filter(all, &low))
         }
         "removetarget" => Some(filter(s.data.all_targets.removable_strings(), &args[1])),
@@ -1298,7 +1298,7 @@ pub fn tab_complete(reg: &Registry, selected: Option<NpcId>, args: &[String]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::Node;
+    use crate::sentinel_core::node::Node;
 
     struct Look;
     impl Lookup for Look {

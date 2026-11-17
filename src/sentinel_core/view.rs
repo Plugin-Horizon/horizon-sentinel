@@ -99,7 +99,7 @@ impl EntityView {
     }
     /// What `entityname:` patterns match: the custom name, else the type name.
     pub fn entity_name(&self) -> String {
-        self.custom_name.clone().unwrap_or_else(|| crate::target::bukkit_type_name(&self.kind))
+        self.custom_name.clone().unwrap_or_else(|| crate::sentinel_core::target::bukkit_type_name(&self.kind))
     }
     /// `SentinelUtilities.isInvisible`: an invisibility effect and nothing in either hand (armor
     /// is ignored, as in Sentinel).

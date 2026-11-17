@@ -3,8 +3,8 @@
 //! `whenAttacksHappened`). Translated from Sentinel (MIT, see LICENSE); the tables are Sentinel's
 //! 1.16+ values, not vanilla's attribute numbers.
 
-use crate::data::SentinelData;
-use crate::view::{EntityView, ItemView, Vec3};
+use crate::sentinel_core::data::SentinelData;
+use crate::sentinel_core::view::{EntityView, ItemView, Vec3};
 
 /// `WEAPON_DAMAGE_MULTIPLIERS` (by item path).
 fn weapon_multiplier(item: &str) -> Option<f64> {
@@ -215,11 +215,11 @@ pub fn incoming_to_sentinel(
 pub fn shield_blocks(blocking: bool, me: &EntityView, attacker: &EntityView) -> bool {
     blocking
         && me.off_hand.as_ref().or(me.main_hand.as_ref()).is_some_and(|i| is_shield(&i.id))
-        && crate::view::looking_towards(me.eye, me.yaw, me.pitch, attacker.pos, 45.0, 45.0)
+        && crate::sentinel_core::view::looking_towards(me.eye, me.yaw, me.pitch, attacker.pos, 45.0, 45.0)
 }
 
 /// Rolls the drops of a dead Sentinel (`getDrops`): each with its chance (missing = always).
-pub fn roll_drops(data: &SentinelData, mut random: impl FnMut() -> f64) -> Vec<crate::data::DropItem> {
+pub fn roll_drops(data: &SentinelData, mut random: impl FnMut() -> f64) -> Vec<crate::sentinel_core::data::DropItem> {
     data.drops
         .iter()
         .enumerate()
@@ -227,7 +227,7 @@ pub fn roll_drops(data: &SentinelData, mut random: impl FnMut() -> f64) -> Vec<c
             Some(chance) => random() <= *chance,
             None => true,
         })
-        .filter_map(|(_, n)| crate::data::DropItem::from_node(n))
+        .filter_map(|(_, n)| crate::sentinel_core::data::DropItem::from_node(n))
         .collect()
 }
 

@@ -2,7 +2,7 @@
 //! TOML, `config/sentinel-common.toml`. Keys keep Sentinel's names with dashes for spaces.
 //! [`Config::from_sentinel_yaml`] reads an existing Sentinel `config.yml` for a move.
 
-use crate::yaml;
+use crate::sentinel_core::yaml;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 
@@ -154,7 +154,7 @@ impl Default for Config {
     }
 }
 
-pub const DEFAULT_TOML: &str = include_str!("../default.toml");
+pub const DEFAULT_TOML: &str = include_str!("../../data/sentinel/default.toml");
 
 /// A value source: TOML (`a-b`) or Sentinel's YAML (`a b`).
 trait Source {

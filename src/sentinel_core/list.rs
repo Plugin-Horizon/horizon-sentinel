@@ -6,9 +6,9 @@
 //! every NPC whose name contains a `3`. Rust's `regex` syntax stands in for Java's; the two agree
 //! on everything but look-around and back-references.
 
-use crate::node::Node;
-use crate::target::{self, NPCS, OWNER};
-use crate::view::{EntityView, ItemView};
+use crate::sentinel_core::node::Node;
+use crate::sentinel_core::target::{self, NPCS, OWNER};
+use crate::sentinel_core::view::{EntityView, ItemView};
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -683,7 +683,7 @@ fn translate_colors(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::view::NpcInfo;
+    use crate::sentinel_core::view::NpcInfo;
 
     fn npc(id: i32, name: &str) -> EntityView {
         EntityView {
@@ -758,9 +758,9 @@ mod tests {
         let mut list = TargetList::default();
         TargetLabel::parse("owner").add_to(&mut list);
         TargetLabel::parse("npc:16").add_to(&mut list);
-        let yaml = crate::node::to_yaml(&list.save(), 0);
+        let yaml = crate::sentinel_core::node::to_yaml(&list.save(), 0);
         assert_eq!(yaml, "targets:\n- OWNER\nbyNpcName:\n- '16'\n");
-        let back = TargetList::load(&crate::node::parse_yaml(&yaml).unwrap());
+        let back = TargetList::load(&crate::sentinel_core::node::parse_yaml(&yaml).unwrap());
         assert_eq!(back, list);
     }
 
