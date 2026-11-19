@@ -676,6 +676,11 @@ fn level_name() -> String {
 
 /// Every permission node Sentinel asks about: `sentinel.basic`, Citizens' `npc.select` and `citizens.admin`,
 /// and one `sentinel.<sub>` per subcommand (`commands::sub_node`).
+/// `sentinel.basic`, the node the command itself asks.
+fn basic_node() -> PermissionNode {
+    PermissionNode::new("sentinel.basic", PermissionValueType::Boolean)
+}
+
 fn sentinel_node_names() -> Vec<String> {
     let mut names = vec!["sentinel.basic".to_owned(), "npc.select".to_owned(), "citizens.admin".to_owned()];
     names.extend(commands::SUBCOMMANDS.iter().map(|s| commands::sub_node(s.name)));
@@ -974,31 +979,30 @@ impl Hooks for Mod {
     }
 
     fn permission_gather_nodes(&self, event: &mut PermissionGatherNodesEvent<'_>) {
-        // Operator level 2 is the default of every Sentinel node (`NODE_LEVEL` in sentinel_core::commands).
+        // Operator level 1 (any operator, Bukkit's `default: op`) is the default of every Sentinel node
+        // (`NODE_LEVEL` in sentinel_core::commands).
         for name in sentinel_node_names() {
             let node = PermissionNode::new(name, PermissionValueType::Boolean);
-            let _ = event.nodes.add(node, NodeDefault::Level(PermissionLevel::from_level(2)));
+            let _ = event.nodes.add(node, NodeDefault::Level(PermissionLevel::from_level(i32::from(commands::NODE_LEVEL))));
         }
     }
 
     fn register_commands(&self, _: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
         for usage in USAGES {
-            event.commands.push(Command::new(usage));
+            // Hidden from, and refused to, whoever lacks `sentinel.basic` (the original command's `permission`).
+            event.commands.push(Command::op(usage, commands::NODE_LEVEL).with_node(&basic_node()));
         }
     }
 
-    /// `/sentinel` from a player or the console. Other sources (command blocks, functions) are refused.
+    /// `/sentinel` from a player, the console or any other source (command blocks and functions act as the
+    /// console: every permission, no selection, so they need `--id`).
     fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>) -> Flow {
         if event.command.literals.first().map(String::as_str) != Some("sentinel") {
             return Flow::Continue;
         }
         let (player, op_level) = match &event.source {
             CommandSource::Player { player, permission } => (Some(player.uuid()), permission.level()),
-            CommandSource::Console { permission } => (None, permission.level()),
-            _ => {
-                let _ = host.commands().feedback(Text::literal("Sentinel answers players and the console only."));
-                return Flow::Cancel;
-            }
+            other => (None, other.permission().level()),
         };
         let args = match event.command.argument("args") {
             Some(CommandArgumentValue::String(s)) => s.clone(),
@@ -1012,15 +1016,21 @@ impl Hooks for Mod {
 
     /// `/sentinel addtarget|addignore|...` complete as Sentinel's `onTabComplete` does.
     // VERIFY: the event fields `player`, `command`, `range` and `suggestions` (native_tab_complete).
-    fn tab_complete(&self, _host: &mut dyn ServerHost, event: &mut TabCompleteEvent<'_>) {
-        let line = event.command.trim_start_matches('/');
-        let mut parts = line.splitn(2, ' ');
-        if parts.next() != Some("sentinel") {
-            return;
-        }
-        let arguments: Vec<String> = parts.next().unwrap_or("").split_whitespace().map(str::to_owned).collect();
-        let selected = CitizensBridge.selected(event.player);
-        let words = commands::tab_complete(&crate::sentinel_core::registry(), selected, &arguments).unwrap_or_default();
+    fn tab_complete(&self, host: &mut dyn ServerHost, event: &mut TabCompleteEvent<'_>) {
+        // The trailing empty word is kept: `/sentinel addtarget ` completes before a letter is typed.
+        let Some(arguments) = commands::tab_args(event.command) else { return };
+        let words = if arguments.len() == 1 {
+            // The subcommand names the sender may use (`sentinel.basic` and the subcommand's node).
+            match sentinel_grants(host, event.player) {
+                Some((_, answers)) if answers.get("sentinel.basic").copied().unwrap_or(false) => {
+                    commands::subcommand_names(&arguments[0], |node| answers.get(node).copied().unwrap_or(false))
+                }
+                _ => Vec::new(),
+            }
+        } else {
+            let selected = CitizensBridge.selected(event.player);
+            commands::tab_complete(&crate::sentinel_core::registry(), selected, &arguments).unwrap_or_default()
+        };
         for text in words {
             event.suggestions.push(Suggestion::new((event.range[0], event.range[1]), text));
         }

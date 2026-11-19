@@ -113,8 +113,8 @@ fn allowed(sender: &Sender, look: &dyn Lookup, node: &str, default_level: u8) ->
 
 /// Every permission node defaults to operators: `sentinel.*` has `default: op` in the real
 /// plugin.yml and its children are granted through it (`npc.select` and `citizens.admin` are
-/// Citizens' and default to operators too).
-const NODE_LEVEL: u8 = 2;
+/// Citizens' and default to operators too). Bukkit's `op` is any operator, so the lowest level.
+pub const NODE_LEVEL: u8 = 1;
 
 /// One subcommand as its `@Command` annotation declares it. `min` and `max` count the arguments
 /// including the subcommand word itself (`argsLength()`).
@@ -297,6 +297,25 @@ fn split_flags<'a>(raw: &[&'a str]) -> (Vec<&'a str>, Option<&'a str>) {
         i += 1;
     }
     (words, id)
+}
+
+/// The words after `/sentinel ` of a command line with the last (possibly empty) word being typed; None when
+/// the line is not `/sentinel ` followed by something (`onTabComplete` fires for `args.length == 2` with an
+/// empty second word as well).
+pub fn tab_args(line: &str) -> Option<Vec<String>> {
+    let rest = line.trim_start_matches('/').strip_prefix("sentinel ")?;
+    Some(rest.split(' ').map(str::to_owned).collect())
+}
+
+/// The subcommand names that start with `prefix` and whose node `may` run (Citizens completes its command
+/// modifiers the sender has the permission for).
+pub fn subcommand_names(prefix: &str, may: impl Fn(&str) -> bool) -> Vec<String> {
+    let low = prefix.to_lowercase();
+    SUBCOMMANDS
+        .iter()
+        .filter(|s| s.name.starts_with(&low) && may(&sub_node(s.name)))
+        .map(|s| s.name.to_owned())
+        .collect()
 }
 
 /// Runs `/sentinel <args>` (without the command name).
@@ -1250,7 +1269,7 @@ fn info(out: &mut Outcome, full_name: &str, d: &SentinelData, body: Option<&Enti
 /// `addignore` and `addavoid` (prefixes, type names, `helditem:` ... with `name:` and `lore:`)
 /// and of `removetarget`, `removeignore` and `removeavoid` (what the NPC's list holds), for an
 /// NPC that is a Sentinel. `args` are the words after `/sentinel`, the last the one being typed.
-/// None: not this command's business (the subcommand names come from the command tree).
+/// None: not this command's business (the subcommand names are `subcommand_names`).
 /// GAP: the item prefixes complete `lore:` and `name:` only; Bukkit adds every material name.
 pub fn tab_complete(reg: &Registry, selected: Option<NpcId>, args: &[String]) -> Option<Vec<String>> {
     if args.len() != 2 {
@@ -1378,6 +1397,38 @@ mod tests {
         assert!(o.effects.contains(&Effect::Health(60, 25.0)));
         let o = run(&mut r, &owner, "health 25 --id x", &Look);
         assert!(o.lines[0].contains("ID input is invalid (not an integer)!"));
+    }
+
+    #[test]
+    fn a_level_one_operator_may_use_sentinel() {
+        let mut r = reg();
+        let op1 = Sender { player: Some(9), op_level: 1, selected: Some(60) };
+        run(&mut r, &op1, "deathxp 7", &Look);
+        assert_eq!(r.sentinels[&60].data.death_xp, 7);
+        let none = Sender { player: Some(9), op_level: 0, selected: Some(60) };
+        let o = run(&mut r, &none, "deathxp 8", &Look);
+        assert!(o.lines[0].contains("do not have permission"));
+    }
+
+    #[test]
+    fn tab_args_keep_the_empty_word_being_typed() {
+        assert_eq!(tab_args("sentinel addtarget "), Some(vec!["addtarget".to_owned(), "".to_owned()]));
+        assert_eq!(tab_args("/sentinel "), Some(vec!["".to_owned()]));
+        assert_eq!(tab_args("sentinel removetarget pl"), Some(vec!["removetarget".to_owned(), "pl".to_owned()]));
+        assert_eq!(tab_args("sentinel"), None);
+        assert_eq!(tab_args("other addtarget "), None);
+        let r = reg();
+        let c = tab_complete(&r, Some(60), &tab_args("sentinel addtarget ").unwrap()).unwrap();
+        assert!(c.contains(&"player:".to_owned()), "{c:?}");
+    }
+
+    #[test]
+    fn subcommand_names_follow_the_prefix_and_the_permission() {
+        let all = subcommand_names("", |_| true);
+        assert_eq!(all.len(), SUBCOMMANDS.len());
+        assert_eq!(subcommand_names("addt", |_| true), vec!["addtarget".to_owned()]);
+        assert_eq!(subcommand_names("ADDT", |_| true), vec!["addtarget".to_owned()]);
+        assert!(subcommand_names("addt", |node| node != "sentinel.addtarget").is_empty());
     }
 
     #[test]
