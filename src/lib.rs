@@ -35,6 +35,8 @@ use std::time::Instant;
 const ID: &str = crate::sentinel_core::MOD_ID;
 /// Sentinel's own config in the server folder, read instead of the TOML whenever it exists.
 const ORIGINAL_CONFIG: &str = "plugins/Sentinel/config.yml";
+/// The Citizens selection key of the console: `u128::MAX`, which no player UUID can be.
+const CONSOLE_SELECTION: u128 = u128::MAX;
 
 fn log(line: &str) {
     eprintln!("[sentinel] {line}");
@@ -732,7 +734,9 @@ fn sentinel_command(host: &mut dyn ServerHost, player: Option<u128>, op_level: u
     if !library_ready() {
         return vec!["\u{a7}2[Sentinel] \u{a7}cNo NPC library is loaded (Sentinel needs Citizens).".into()];
     }
-    let sender = Sender { player, op_level, selected: player.and_then(|p| bridge.selected(p)) };
+    // The console's own Citizens selection sits under the key `CONSOLE_SELECTION` (Citizens' `skey`).
+    let selected = bridge.selected(player.unwrap_or(CONSOLE_SELECTION));
+    let sender = Sender { player, op_level, selected };
     let granted = player.and_then(|p| sentinel_grants(&mut *host, p));
     let out = {
         let look = Look { host: &*host, bridge: &bridge, level_name: level_name(), granted };
