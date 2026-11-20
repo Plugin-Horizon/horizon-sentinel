@@ -1,5 +1,9 @@
 # horizon-sentinel
 
+## Port status
+
+Compared with Sentinel master (96672f1): **85 %** of the original's commands, permissions, config keys, messages and features work today; **85 %** once our open Horizon PRs are merged; **86 %** with the engine changes we are writing; **87 %** with the newest Horizon SDK. Counted on 213/250 items (see HMOD_PORT.md). Status: not yet compiled after the 2026-11-20 round.
+
 > **Unofficial Rust port of Sentinel for the Horizon server (https://github.com/arismoko/horizon). Not affiliated with or endorsed by the Sentinel authors.**
 
 Combat NPCs for [Horizon](https://github.com/arismoko/horizon) servers, as a native mod: a
