@@ -13,16 +13,17 @@ use citizens::yaml::{Node as CitNode, Style};
 use mod_api::{
     ClipBlock, ClipFluid, Command, CommandArgumentValue, CommandSource, Compound, Config,
     ConfigKind, ConfigLoadingEvent, ConfigReloadingEvent, EntityRef, EquipmentSlot, Flow, Hand,
-    HostSide, Hooks, Identifier, ItemDrop, ItemStack, LevelRandomHost, LevelRef, LevelTickPostEvent,
-    LivingDamagePreEvent, LivingDeathEvent, LivingDropsEvent, LivingIncomingDamageEvent,
-    LivingKnockbackEvent, LivingRef, MobRef, NodeDefault, PermissionGatherNodesEvent,
+    HostSide, Hooks, Identifier, ItemDrop, ItemPlace, ItemStack, LevelRandomHost, LevelRef,
+    LevelTickPostEvent, LivingDamagePreEvent, LivingDeathEvent, LivingDropsEvent,
+    LivingIncomingDamageEvent, LivingKnockbackEvent, LivingRef, MenuClosedEvent, MenuReplace, MobRef,
+    NodeDefault, PermissionGatherNodesEvent,
     PermissionLevel, PermissionNode, PermissionValueType, PlayerRef, RegisterCommandsEvent,
     RegisterConfigsEvent, RunModCommandEvent, ServerChatEvent, ServerHost, ServerStoppingEvent,
     ServerTickEvent, ServerTickPhase, SoundSource, Suggestion, TabCompleteEvent, Tag, Text,
 };
 use crate::sentinel_core::combat::HitDecision;
 use crate::sentinel_core::commands::{self, Effect, Sender};
-use crate::sentinel_core::data::Location;
+use crate::sentinel_core::data::{DropItem, Location};
 use crate::sentinel_core::node::Node;
 use crate::sentinel_core::npc::{NpcBridge, NpcId, TRAIT_NAME};
 use crate::sentinel_core::registry::DeathOutcome;
@@ -60,6 +61,8 @@ static FINAL_DAMAGE: Mutex<Vec<(i32, f32, Instant)>> = Mutex::new(Vec::new());
 static DEATHS: Mutex<Vec<(u32, DeathOutcome, [f64; 3])>> = Mutex::new(Vec::new());
 /// Arrows a Sentinel shot: dimension, entity id, the game time they are removed at.
 static ARROWS: Mutex<Vec<(String, u32, i64)>> = Mutex::new(Vec::new());
+/// The drops menus open now (`/sentinel drops`).
+static DROP_MENUS: Mutex<Vec<DropMenu>> = Mutex::new(Vec::new());
 
 fn view(id: i32) -> Option<EntityView> {
     lock(&VIEWS).get(&id).cloned()
@@ -727,6 +730,90 @@ fn sentinel_grants(host: &mut dyn ServerHost, uuid: u128) -> Option<(u128, BTree
     Some((uuid, answers))
 }
 
+/// Slots of a drops menu: Sentinel's chest of four rows (`9 * 4`).
+const DROP_MENU_ROWS: u8 = 4;
+const DROP_MENU_SLOTS: usize = 36;
+
+/// A drops menu a player has open: its window and the NPC whose drops it edits. `seen` is what the
+/// menu showed at the last sync (item id and amount per stack), so only a change is written back.
+#[derive(Clone)]
+struct DropMenu {
+    uuid: u128,
+    window: i32,
+    npc: NpcId,
+    seen: Vec<(String, u32)>,
+}
+
+/// The item id and amount of each stack, the part a menu can change.
+fn stack_keys(host: &dyn ServerHost, stacks: &[ItemStack]) -> Vec<(String, u32)> {
+    stacks.iter().map(|s| (s.item().id(host), s.count())).collect()
+}
+
+/// Opens the drops menu of `npc` for `uuid` (`/sentinel drops`), showing the NPC's drops in list order.
+/// An item the registry lacks keeps no slot, as it has no stack to show.
+fn open_drops_menu(host: &mut dyn ServerHost, uuid: u128, npc: NpcId) {
+    let drops = crate::sentinel_core::registry().get_mut(npc).map(|s| s.data.drops.clone()).unwrap_or_default();
+    let items: Vec<Option<ItemStack>> = drops
+        .iter()
+        .filter_map(DropItem::from_node)
+        .take(DROP_MENU_SLOTS)
+        .map(|d| drop_stack(&*host, &d.id, d.count))
+        .collect();
+    let shown: Vec<ItemStack> = items.iter().flatten().cloned().collect();
+    let seen = stack_keys(&*host, &shown);
+    let title = Text::literal(format!("Sentinel {npc}"));
+    lock(&DROP_MENUS).retain(|m| m.uuid != uuid);
+    match host.open_menu(uuid, DROP_MENU_ROWS, title, items, MenuReplace::CloseFirst) {
+        Ok(Some(window)) => lock(&DROP_MENUS).push(DropMenu { uuid, window, npc, seen }),
+        _ => log(&format!("the drops menu of NPC {npc} could not be opened")),
+    }
+}
+
+/// Writes what the open drops menus show back to their NPCs, once a stack changed. The menu closing
+/// carries no contents, so every server tick reads them: a close keeps the last tick's read. Entries
+/// that keep their item and amount keep their saved fields (lore, name); a changed stack is saved as
+/// Bukkit writes a plain one.
+fn sync_drop_menus(host: &mut dyn ServerHost) {
+    let menus: Vec<DropMenu> = lock(&DROP_MENUS).to_vec();
+    for menu in menus {
+        let Some(open) = host.menu(menu.uuid, menu.window) else {
+            lock(&DROP_MENUS).retain(|m| m.uuid != menu.uuid || m.window != menu.window);
+            continue;
+        };
+        let mut stacks: Vec<ItemStack> = Vec::new();
+        for slot in 0..DROP_MENU_SLOTS {
+            if let Some(stack) = (ItemPlace::MenuSlot { menu: open, slot }).stack(&mut *host) {
+                stacks.push(stack);
+            }
+        }
+        let now = stack_keys(&*host, &stacks);
+        if now == menu.seen {
+            continue;
+        }
+        {
+            let mut reg = crate::sentinel_core::registry();
+            let Some(s) = reg.get_mut(menu.npc) else { continue };
+            let old = s.data.drops.clone();
+            let next: Vec<Node> = now
+                .iter()
+                .enumerate()
+                .map(|(i, (id, count))| {
+                    let kept = old
+                        .get(i)
+                        .filter(|n| DropItem::from_node(*n).is_some_and(|d| d.id == *id && d.count == *count));
+                    kept.cloned().unwrap_or_else(|| DropItem::plain_node(id, *count))
+                })
+                .collect();
+            s.data.drops = next;
+        }
+        if let Some(m) = lock(&DROP_MENUS).iter_mut().find(|m| m.uuid == menu.uuid && m.window == menu.window) {
+            m.seen = now;
+        }
+        let mut bridge = CitizensBridge;
+        bridge.mark_dirty(menu.npc);
+    }
+}
+
 /// Runs `/sentinel <args>` for a player (or the console when `player` is None) and carries out what
 /// it asks; returns the lines to show.
 fn sentinel_command(host: &mut dyn ServerHost, player: Option<u128>, op_level: u8, args: &str) -> Vec<String> {
@@ -764,6 +851,11 @@ fn sentinel_command(host: &mut dyn ServerHost, player: Option<u128>, op_level: u
             Effect::Respawn(npc) => {
                 let at = crate::sentinel_core::registry().respawn_point(*npc, &bridge);
                 bridge.spawn(*npc, at.as_ref());
+            }
+            Effect::OpenDrops(npc) => {
+                if let Some(uuid) = player {
+                    open_drops_menu(host, uuid, *npc);
+                }
             }
             // The config file is read again on its own within a second of a save.
             Effect::Reload => {}
@@ -1154,6 +1246,12 @@ impl Hooks for Mod {
         Flow::Continue
     }
 
+    /// A drops menu closed (the player closed it, or left): its last read was written at the tick before.
+    fn menu_closed(&self, _host: &mut dyn ServerHost, event: &mut MenuClosedEvent) {
+        let (uuid, window) = (event.uuid, event.window);
+        lock(&DROP_MENUS).retain(|m| m.uuid != uuid || m.window != window);
+    }
+
     /// Sentinel's `allow knockback` off: a hit on the Sentinel pushes it nowhere.
     fn living_knockback(&self, _level: &mut dyn LevelRandomHost, event: &mut LivingKnockbackEvent<'_>) -> Flow {
         if let Some(victim) = view(event.entity) {
@@ -1164,11 +1262,12 @@ impl Hooks for Mod {
         Flow::Continue
     }
 
-    fn server_tick(&self, _host: &mut dyn ServerHost, event: &mut ServerTickEvent<'_>) {
+    fn server_tick(&self, host: &mut dyn ServerHost, event: &mut ServerTickEvent<'_>) {
         let mut guard = lock_state(self);
         let st = &mut *guard;
         match event.phase {
             ServerTickPhase::ServerTickStart { world_running: true, .. } => {
+                sync_drop_menus(host);
                 // The NPC library's bridge: installs once its registry is up, syncs the traits
                 // every 5 ticks and saves changes.
                 install(st);

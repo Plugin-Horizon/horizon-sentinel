@@ -46,6 +46,8 @@ pub enum Effect {
     Reload,
     /// The settings changed: save the NPC.
     Dirty(NpcId),
+    /// Open the drops menu of the NPC for the sender (`/sentinel drops`, `SentinelHealthCommands.drops`).
+    OpenDrops(NpcId),
     /// Set the body's health to its new maximum.
     Health(NpcId, f64),
     /// `npc.setProtected` (`SentinelTrait.setInvincible`).
@@ -984,7 +986,7 @@ pub fn run(reg: &mut Registry, sender: &Sender, args: &str, look: &dyn Lookup) -
             if sender.player.is_none() {
                 out.bad("Players only!");
             } else {
-                out.bad("The drops menu is not available yet; edit `drops` in the NPC's saves.");
+                out.effects.push(Effect::OpenDrops(npc));
             }
         }
         "spawnpoint" | "avoidreturnpoint" => {
@@ -1392,6 +1394,19 @@ mod tests {
         assert!(!o.effects.iter().any(|e| matches!(e, Effect::Dirty(_))));
         run(&mut r, &op(), "deathxp 7", &Look);
         assert_eq!(r.sentinels[&60].data.death_xp, 7);
+    }
+
+    #[test]
+    fn drops_opens_the_menu_for_players_only() {
+        let mut r = reg();
+        let o = run(&mut r, &op(), "drops", &Look);
+        assert!(o.effects.contains(&Effect::OpenDrops(60)));
+        assert!(!o.effects.iter().any(|e| matches!(e, Effect::Dirty(_))));
+        let console = Sender { player: None, op_level: 4, selected: Some(60) };
+        let o = run(&mut r, &console, "drops", &Look);
+        assert_eq!(o.lines.len(), 1);
+        assert!(o.lines[0].ends_with("Players only!"));
+        assert!(o.effects.is_empty());
     }
 
     #[test]

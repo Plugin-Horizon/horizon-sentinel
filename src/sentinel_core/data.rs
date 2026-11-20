@@ -650,7 +650,20 @@ fn plain_name(s: &str) -> String {
     out
 }
 
+/// The material name Bukkit writes for an item id: `minecraft:diamond_sword` is `DIAMOND_SWORD`.
+pub fn material_name(id: &str) -> String {
+    id.strip_prefix("minecraft:").unwrap_or(id).to_uppercase()
+}
+
 impl DropItem {
+    /// A drop saved the way Bukkit writes a plain stack: its material (`type`) and `amount`.
+    pub fn plain_node(id: &str, count: u32) -> Node {
+        let mut node = Node::map();
+        node.set("type", Node::string(material_name(id)));
+        node.set("amount", Node::scalar(count));
+        node
+    }
+
     pub fn from_node(node: &Node) -> Option<Self> {
         let ty = node.str("type")?;
         let name = node.str("meta.display-name").map(plain_name).filter(|n| !n.is_empty());
@@ -677,6 +690,17 @@ mod tests {
     use super::*;
     use crate::sentinel_core::node::{parse_yaml, to_yaml};
     use crate::sentinel_core::config::Config;
+
+    #[test]
+    fn plain_drop_is_saved_as_bukkit_writes_it() {
+        assert_eq!(material_name("minecraft:diamond_sword"), "DIAMOND_SWORD");
+        let node = DropItem::plain_node("minecraft:bread", 3);
+        assert_eq!(node.str("type"), Some("BREAD"));
+        assert_eq!(
+            DropItem::from_node(&node),
+            Some(DropItem { id: "minecraft:bread".into(), count: 3, name: None, lore: vec![], enchants: vec![] })
+        );
+    }
 
     /// The shape of an arena fighter's trait (numbers made up).
     const FIGHTER: &str = "\
