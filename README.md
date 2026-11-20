@@ -65,13 +65,12 @@ What does not work yet on arismoko/horizon (each is marked `TODO(arismoko-api: .
 - Mannequin NPC bodies cannot path-find, follow or turn to their target: they walk to the target's position each tick.
 - Shield raising, the vanilla attack of the body and visual-only lightning are not available.
 - An NPC's own inventory is not exposed by Citizens yet, so auto-switching finds nothing; potions' contents are not copied.
-- Experience drops, the hidden death message and custom drop stacks are not applied.
-- `/sentinel drops` (the drops menu) is not available: drops can only be edited in the NPC's saves.
-- `group:`, `permission:`, `potion:`, `sbscoreabove:`/`sbscorebelow:`, `sbteam:` and `npc_owned_by:` targets are accepted and saved but never match (no group, score, team or owner query for them).
+- Experience drops and the hidden death message are not applied. A drop's custom name, lore and enchantments are not kept (drops keep item and amount).
+- The drops menu (`/sentinel drops`) saves what it shows at each server tick: an item put in and closed within the same tick is lost.
+- `group:`, `permission:`, `sbscoreabove:`/`sbscorebelow:` and `sbteam:` targets are accepted and saved but never match (no group, score, team or node query for them).
 - `sentinel.*` and `sentinel.admin` are not declared (permission nodes have no children); each `sentinel.<sub>` node is granted on its own. The default is operator level 1 (any operator).
 - `/sentinel wgregion` needs a WorldGuard region lookup between mods and answers "WorldGuard not loaded".
-- The console has no NPC selection of its own; it acts with `--id <npc>`.
-- Item-name completion of `helditem:`, `offhand:`, `equipped:`, `in_inventory:` offers `lore:` and `name:` only.
+- The console acts on its Citizens selection (Citizens' console key) or with `--id <npc>`.
 - Needs the arismoko `citizens` mod (see `horizon-citizens`).
 
 ## Licence
@@ -80,5 +79,5 @@ MIT, see [LICENSE](LICENSE). Sentinel is MIT-licensed (Copyright (c) 2019-2022 A
 Goodwin); its source was read and parts of it are translated here, so its notice is kept in
 LICENSE. Citizens' source was not used.
 
-## Round 3
-`potion:` and `npc_owned_by:` targets work; item prefixes complete item names. Still not matching: `permission:`, `group:`, `sbteam:`, `sbscoreabove:`, `sbscorebelow:`; `/sentinel drops` has no menu; `wgregion` is inert. See HMOD_PORT.md.
+## Status
+`potion:` and `npc_owned_by:` targets work; item prefixes complete item names; the drops menu and the drops a Sentinel leaves on death work; the console uses its own NPC selection. Still not matching: `permission:`, `group:`, `sbteam:`, `sbscoreabove:`, `sbscorebelow:`; `wgregion` is inert. See HMOD_PORT.md.
