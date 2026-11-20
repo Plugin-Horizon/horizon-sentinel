@@ -17,7 +17,7 @@ use mod_api::{
     LevelTickPostEvent, LivingDamagePreEvent, LivingDeathEvent, LivingDropsEvent,
     LivingIncomingDamageEvent, LivingKnockbackEvent, LivingRef, MenuClosedEvent, MenuReplace, MobRef,
     NodeDefault, PermissionGatherNodesEvent,
-    PermissionLevel, PermissionNode, PermissionValueType, PlayerRef, RegisterCommandsEvent,
+    PermissionLevel, PermissionNode, PermissionValueType, PlayerRef, RegisterNodeCommandsEvent,
     RegisterConfigsEvent, RunModCommandEvent, ServerChatEvent, ServerHost, ServerStoppingEvent,
     ServerTickEvent, ServerTickPhase, SoundSource, Suggestion, TabCompleteEvent, Tag, Text,
 };
@@ -1109,7 +1109,7 @@ impl Hooks for Mod {
         }
     }
 
-    fn register_commands(&self, _: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
+    fn register_node_commands(&self, _: &mut dyn ServerHost, event: &mut RegisterNodeCommandsEvent<'_>) {
         for usage in USAGES {
             // Hidden from, and refused to, whoever lacks `sentinel.basic` (the original command's `permission`).
             event.commands.push(Command::op(usage, commands::NODE_LEVEL).with_node(&basic_node()));
