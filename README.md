@@ -79,3 +79,6 @@ What does not work yet on arismoko/horizon (each is marked `TODO(arismoko-api: .
 MIT, see [LICENSE](LICENSE). Sentinel is MIT-licensed (Copyright (c) 2019-2022 Alex "mcmonkey"
 Goodwin); its source was read and parts of it are translated here, so its notice is kept in
 LICENSE. Citizens' source was not used.
+
+## Round 3
+`potion:` and `npc_owned_by:` targets work; item prefixes complete item names. Still not matching: `permission:`, `group:`, `sbteam:`, `sbscoreabove:`, `sbscorebelow:`; `/sentinel drops` has no menu; `wgregion` is inert. See HMOD_PORT.md.

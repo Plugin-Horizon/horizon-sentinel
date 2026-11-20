@@ -1270,7 +1270,18 @@ fn info(out: &mut Outcome, full_name: &str, d: &SentinelData, body: Option<&Enti
 /// and of `removetarget`, `removeignore` and `removeavoid` (what the NPC's list holds), for an
 /// NPC that is a Sentinel. `args` are the words after `/sentinel`, the last the one being typed.
 /// None: not this command's business (the subcommand names are `subcommand_names`).
-/// GAP: the item prefixes complete `lore:` and `name:` only; Bukkit adds every material name.
+/// The item prefixes complete `lore:`, `name:` and every item name (`set_materials`).
+static MATERIALS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+/// The item names the item prefixes complete (the glue fills them from the item registry once).
+pub fn set_materials(names: Vec<String>) {
+    let _ = MATERIALS.set(names);
+}
+
+pub fn materials() -> &'static [String] {
+    MATERIALS.get().map_or(&[], Vec::as_slice)
+}
+
 pub fn tab_complete(reg: &Registry, selected: Option<NpcId>, args: &[String]) -> Option<Vec<String>> {
     if args.len() != 2 {
         return None;
@@ -1287,7 +1298,8 @@ pub fn tab_complete(reg: &Registry, selected: Option<NpcId>, args: &[String]) ->
                 if colon + 1 < low.len() {
                     let prefix = &low[..colon];
                     if ["helditem", "offhand", "equipped", "in_inventory"].contains(&prefix) {
-                        let items = vec![format!("{prefix}:lore:"), format!("{prefix}:name:")];
+                        let mut items = vec![format!("{prefix}:lore:"), format!("{prefix}:name:")];
+                        items.extend(materials().iter().map(|m| format!("{prefix}:{m}")));
                         return Some(filter(items, &low));
                     }
                 }

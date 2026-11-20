@@ -454,9 +454,9 @@ fn sub_lists(node: Option<&Node>) -> Vec<TargetList> {
 }
 
 /// The integration targets this port can answer: `squad:<name>` (another Sentinel's squad),
-/// `uuid:<uuid>`, `healthabove:<percent>` and `healthbelow:<percent>`. `permission:`, `potion:`,
-/// `sbteam:`, `sbscoreabove:`, `sbscorebelow:` and `npc_owned_by:` are valid prefixes but never
-/// match until the host can tell (see GAPS.md).
+/// `uuid:<uuid>`, `healthabove:<percent>`, `healthbelow:<percent>`, `potion:<effect>` and
+/// `npc_owned_by:<label>`. `permission:`, `sbteam:`, `sbscoreabove:` and `sbscorebelow:` are valid
+/// prefixes but never match until the host can tell (GAPS_UPSTREAM).
 fn other_target(entry: &str, e: &EntityView, asker: &Asker) -> bool {
     let Some((prefix, value)) = entry.split_once(':') else {
         return false;
@@ -478,8 +478,39 @@ fn other_target(entry: &str, e: &EntityView, asker: &Asker) -> bool {
             }
             Err(_) => false,
         },
+        // `SentinelPotion`: the entity has this effect (Bukkit's `PotionEffectType.getByName`,
+        // which knows the old names too).
+        "potion" => {
+            let want = potion_id(value);
+            e.potions.iter().any(|p| *p == want)
+        }
+        // `SentinelNPCOwnedBy`: the entity is an NPC whose online owner matches the label.
+        "npc_owned_by" => e.owner_view.as_deref().is_some_and(|owner| {
+            let mut list = TargetList::default();
+            TargetLabel::parse(value).add_to(&mut list);
+            list.is_target(owner, asker)
+        }),
         _ => false,
     }
+}
+
+/// The game's short effect id for a Bukkit `PotionEffectType` name (`INCREASE_DAMAGE` is `strength`).
+fn potion_id(name: &str) -> String {
+    let n = name.trim().to_ascii_lowercase();
+    let n = n.strip_prefix("minecraft:").unwrap_or(&n);
+    match n {
+        "increase_damage" => "strength",
+        "damage_resistance" => "resistance",
+        "fast_digging" => "haste",
+        "slow_digging" => "mining_fatigue",
+        "slow" => "slowness",
+        "jump" => "jump_boost",
+        "confusion" => "nausea",
+        "heal" => "instant_health",
+        "harm" => "instant_damage",
+        other => other,
+    }
+    .to_owned()
 }
 
 /// `SentinelUtilities.uuidEquals`: equal ignoring the UUID version nibble (an NPC's UUID is
@@ -697,6 +728,25 @@ mod tests {
 
     fn player(name: &str) -> EntityView {
         EntityView { id: 99, kind: "minecraft:player".into(), alive: true, player_name: Some(name.into()), ..Default::default() }
+    }
+
+    #[test]
+    fn potion_and_owner_targets() {
+        let asker = Asker::default();
+        let mut list = TargetList::default();
+        assert!(TargetLabel::parse("potion:INCREASE_DAMAGE").add_to(&mut list));
+        let mut e = player("Zed");
+        assert!(!list.is_target(&e, &asker));
+        e.potions = vec!["strength".into()];
+        assert!(list.is_target(&e, &asker));
+        let mut owned = TargetList::default();
+        assert!(TargetLabel::parse("npc_owned_by:player:Zed").add_to(&mut owned));
+        let mut n = npc(5, "Guard");
+        assert!(!owned.is_target(&n, &asker));
+        n.owner_view = Some(Box::new(player("Zed")));
+        assert!(owned.is_target(&n, &asker));
+        n.owner_view = Some(Box::new(player("Other")));
+        assert!(!owned.is_target(&n, &asker));
     }
 
     #[test]

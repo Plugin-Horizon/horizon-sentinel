@@ -1,4 +1,5 @@
 # hmod port: sentinel
+Parity: before ~80% (~200/~250) -> after ~84% (~210/~250) (method: commands, nodes, config keys, messages, integration targets, listed features; items blocked by missing engine API count as not done); blind, uncompiled.
 Round 1
 - Fixed: src/lib.rs build_views: `entity.kind` is an `EntityTypeKey`; mapped to its id string (`k.id(host)`) so `kind` stays a `String`.
 - Fixed: src/lib.rs `Body::push`: a player is pushed with `EntityRef::push` (`entity_push`) and the same delta as other entities (`velocity - target.velocity`). `set_velocity` does not exist on `PlayerRef`, and Horizon refuses velocity writes to players.
@@ -18,3 +19,5 @@ Round 2 (parity audit fixes)
 - Fixed: the command is registered with the `sentinel.basic` node (hidden from and refused to those without it); node default is operator level 1 (any operator, as Bukkit's `default: op`), was 2.
 - Fixed: command blocks and functions may run `/sentinel` (as the console; they need `--id`).
 - Gaps (found): drops menu, `group:`/`permission:`/`potion:`/score/team/owner targets, `sentinel.*` parent node, console selection, `wgregion`, material-name completion.
+
+Round 3 (blind): `potion:<effect>` targets (active effects read per entity, Bukkit's old effect names mapped) and `npc_owned_by:<label>` targets (the owner's online view is attached to each NPC view) now match; the item prefixes (`helditem:`, `offhand:`, `equipped:`, `in_inventory:`) complete every item name from `item_keys()`. Open and why: `permission:` / `group:` (no node query for undeclared nodes, no group list), `sbteam:` / `sbscoreabove:` / `sbscorebelow:` (no scoreboard read API), drops menu (no way to read a closed menu's stacks and write Bukkit-format stack YAML), `sentinel.*` parent (no wildcard nodes), console selection (needs citizens console select), `wgregion` (cross-mod region lookup). All in audit/GAPS_UPSTREAM.md.

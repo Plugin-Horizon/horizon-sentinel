@@ -309,6 +309,12 @@ fn build_views(host: &mut dyn ServerHost, level: LevelRef, dim: &str, bridge: &C
             mob_has_target: mob.map(|m| m.target(&*host).is_some()),
             // The Invisible effect, read as the entity's invisible flag.
             invisible_effect: entity.is_invisible(&*host).unwrap_or(false),
+            potions: living
+                .effects(&*host)
+                .unwrap_or_default()
+                .iter()
+                .map(|e| e.id.id(&*host).trim_start_matches("minecraft:").to_owned())
+                .collect(),
             glowing: entity.glowing(&*host).unwrap_or(false),
             npc,
             main_hand: living.hand_item(&*host, Hand::Main).as_ref().and_then(|s| item_view(&*host, s)),
@@ -323,6 +329,16 @@ fn build_views(host: &mut dyn ServerHost, level: LevelRef, dim: &str, bridge: &C
             ..Default::default()
         };
         out.push(v);
+    }
+    // An NPC's owner, when online, for `npc_owned_by:` targets.
+    let owners: Vec<(usize, u128)> = out
+        .iter()
+        .enumerate()
+        .filter_map(|(i, v)| Some((i, bridge.owner(v.npc.as_ref()?.id)?)))
+        .collect();
+    for (i, owner) in owners {
+        let view = out.iter().find(|v| v.is_player() && v.uuid == owner).cloned();
+        out[i].owner_view = view.map(Box::new);
     }
     out
 }
@@ -1019,6 +1035,11 @@ impl Hooks for Mod {
     fn tab_complete(&self, host: &mut dyn ServerHost, event: &mut TabCompleteEvent<'_>) {
         // The trailing empty word is kept: `/sentinel addtarget ` completes before a letter is typed.
         let Some(arguments) = commands::tab_args(event.command) else { return };
+        if commands::materials().is_empty() {
+            commands::set_materials(
+                host.item_keys().iter().map(|k| k.id(&*host).trim_start_matches("minecraft:").to_owned()).collect(),
+            );
+        }
         let words = if arguments.len() == 1 {
             // The subcommand names the sender may use (`sentinel.basic` and the subcommand's node).
             match sentinel_grants(host, event.player) {
