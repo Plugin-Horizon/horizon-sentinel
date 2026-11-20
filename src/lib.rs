@@ -13,7 +13,7 @@ use citizens::yaml::{Node as CitNode, Style};
 use mod_api::{
     ClipBlock, ClipFluid, Command, CommandArgumentValue, CommandSource, Compound, Config,
     ConfigKind, ConfigLoadingEvent, ConfigReloadingEvent, EntityRef, EquipmentSlot, Flow, Hand,
-    HostSide, Hooks, Identifier, ItemStack, LevelRandomHost, LevelRef, LevelTickPostEvent,
+    HostSide, Hooks, Identifier, ItemDrop, ItemStack, LevelRandomHost, LevelRef, LevelTickPostEvent,
     LivingDamagePreEvent, LivingDeathEvent, LivingDropsEvent, LivingIncomingDamageEvent,
     LivingKnockbackEvent, LivingRef, MobRef, NodeDefault, PermissionGatherNodesEvent,
     PermissionLevel, PermissionNode, PermissionValueType, PlayerRef, RegisterCommandsEvent,
@@ -54,7 +54,8 @@ static VIEWS: Mutex<BTreeMap<i32, EntityView>> = Mutex::new(BTreeMap::new());
 /// The amount a Sentinel victim's hit comes to by Sentinel's armor rule, for `living_damage_pre`.
 static FINAL_DAMAGE: Mutex<Vec<(i32, f32, Instant)>> = Mutex::new(Vec::new());
 /// Death outcomes waiting for the dying entity's drop roll (`living_death` -> `living_drops`).
-static DEATHS: Mutex<Vec<(u32, DeathOutcome)>> = Mutex::new(Vec::new());
+/// The body's position is kept with it, where its own drops appear.
+static DEATHS: Mutex<Vec<(u32, DeathOutcome, [f64; 3])>> = Mutex::new(Vec::new());
 /// Arrows a Sentinel shot: dimension, entity id, the game time they are removed at.
 static ARROWS: Mutex<Vec<(String, u32, i64)>> = Mutex::new(Vec::new());
 
@@ -89,20 +90,29 @@ fn take_final_damage(victim: i32) -> Option<f32> {
     Some(f.remove(i).1)
 }
 
-fn note_death(entity: u32, outcome: DeathOutcome) {
+fn note_death(entity: u32, outcome: DeathOutcome, at: [f64; 3]) {
     let mut d = lock(&DEATHS);
-    d.retain(|(e, _)| *e != entity);
-    d.push((entity, outcome));
+    d.retain(|(e, _, _)| *e != entity);
+    d.push((entity, outcome, at));
     // A death whose loot never rolled (removed without drops) must not pile up.
     if d.len() > 64 {
         d.remove(0);
     }
 }
 
-fn take_death(entity: u32) -> Option<DeathOutcome> {
+fn take_death(entity: u32) -> Option<(DeathOutcome, [f64; 3])> {
     let mut d = lock(&DEATHS);
-    let i = d.iter().position(|(e, _)| *e == entity)?;
-    Some(d.remove(i).1)
+    let i = d.iter().position(|(e, _, _)| *e == entity)?;
+    let (_, outcome, at) = d.remove(i);
+    Some((outcome, at))
+}
+
+/// A stack of `count` of the item `id` (`minecraft:bread`), or none for an id the registry lacks.
+fn drop_stack(host: &dyn ServerHost, id: &str, count: u32) -> Option<ItemStack> {
+    let key = host.item_key(&Identifier::parse(id).ok()?)?;
+    let mut stack = ItemStack::of(key);
+    stack.set_count(count).ok()?;
+    Some(stack)
 }
 
 /// Whether Citizens has its registry up (it does once the world is open, even with no NPCs).
@@ -1118,18 +1128,24 @@ impl Hooks for Mod {
         if outcome.replace_drops || outcome.xp.is_some() {
             // TODO(arismoko-api: living_experience_drop, death_message_hidden): the xp and the
             // hidden death message of the outcome are not applied (see `living_drops`).
-            note_death(entity, outcome);
+            note_death(entity, outcome, dead.pos);
         }
         Flow::Continue
     }
 
     /// The drops of a dead Sentinel (its own list) or of a Sentinel's enemy (none, with `enemy drops`
-    /// off). TODO(arismoko-api: item_key_by_id, item_from_snbt): a Sentinel's own drops (named,
-    /// with lore and enchantments) cannot be built, so the vanilla list stays for it.
-    fn living_drops(&self, _host: &mut dyn ServerHost, event: &mut LivingDropsEvent<'_>) -> Flow {
-        let Some(outcome) = take_death(event.entity as u32) else { return Flow::Continue };
-        if outcome.replace_drops && outcome.drops.is_empty() {
+    /// off). A Sentinel's own drops are placed where its body fell, picked up after 10 ticks as
+    /// Bukkit's `dropItemNaturally` leaves them. TODO(arismoko-api: item_from_snbt): the drops' names,
+    /// lore and enchantments are not built (`DropItem` keeps them, no stack writer exists yet).
+    fn living_drops(&self, host: &mut dyn ServerHost, event: &mut LivingDropsEvent<'_>) -> Flow {
+        let Some((outcome, at)) = take_death(event.entity as u32) else { return Flow::Continue };
+        if outcome.replace_drops {
             event.drops.clear();
+            for drop in &outcome.drops {
+                if let Some(stack) = drop_stack(&*host, &drop.id, drop.count) {
+                    event.drops.push(ItemDrop::new(stack, at, [0.0, 0.0, 0.0], 10));
+                }
+            }
         }
         Flow::Continue
     }
