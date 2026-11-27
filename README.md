@@ -1,5 +1,9 @@
 # horizon-sentinel
 
+## Port status
+
+Compared with Sentinel master (96672f1): **85 %** of the original's commands, permissions, config keys, messages and features work today; **85 %** once our open Horizon PRs are merged; **86 %** with the engine changes we are writing; **87 %** with the newest Horizon SDK. Counted on 213/250 items (see HMOD_PORT.md). Status: not yet compiled after the 2026-11-20 round.
+
 > **Unofficial Rust port of Sentinel for the Horizon server (https://github.com/arismoko/horizon). Not affiliated with or endorsed by the Sentinel authors.**
 
 Combat NPCs for [Horizon](https://github.com/arismoko/horizon) servers, as a native mod: a
@@ -65,7 +69,12 @@ What does not work yet on arismoko/horizon (each is marked `TODO(arismoko-api: .
 - Mannequin NPC bodies cannot path-find, follow or turn to their target: they walk to the target's position each tick.
 - Shield raising, the vanilla attack of the body and visual-only lightning are not available.
 - An NPC's own inventory is not exposed by Citizens yet, so auto-switching finds nothing; potions' contents are not copied.
-- Experience drops, the hidden death message and custom drop stacks are not applied.
+- Experience drops and the hidden death message are not applied. A drop's custom name, lore and enchantments are not kept (drops keep item and amount).
+- The drops menu (`/sentinel drops`) saves what it shows at each server tick: an item put in and closed within the same tick is lost.
+- `group:`, `permission:`, `sbscoreabove:`/`sbscorebelow:` and `sbteam:` targets are accepted and saved but never match (no group, score, team or node query for them).
+- `sentinel.*` and `sentinel.admin` are not declared (permission nodes have no children); each `sentinel.<sub>` node is granted on its own. The default is operator level 1 (any operator).
+- `/sentinel wgregion` needs a WorldGuard region lookup between mods and answers "WorldGuard not loaded".
+- The console acts on its Citizens selection (Citizens' console key) or with `--id <npc>`.
 - Needs the arismoko `citizens` mod (see `horizon-citizens`).
 
 ## Licence
@@ -73,3 +82,6 @@ What does not work yet on arismoko/horizon (each is marked `TODO(arismoko-api: .
 MIT, see [LICENSE](LICENSE). Sentinel is MIT-licensed (Copyright (c) 2019-2022 Alex "mcmonkey"
 Goodwin); its source was read and parts of it are translated here, so its notice is kept in
 LICENSE. Citizens' source was not used.
+
+## Status
+`potion:` and `npc_owned_by:` targets work; item prefixes complete item names; the drops menu and the drops a Sentinel leaves on death work; the console uses its own NPC selection. Still not matching: `permission:`, `group:`, `sbteam:`, `sbscoreabove:`, `sbscorebelow:`; `wgregion` is inert. See HMOD_PORT.md.

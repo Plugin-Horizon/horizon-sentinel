@@ -4,12 +4,12 @@
 //! the order of `SentinelCommand.onCommand` and Citizens' command manager, and every message is
 //! the original's text.
 
-use crate::data::{Location, SentinelData, ATTACK_RATE_MAX, HEAL_RATE_MAX};
-use crate::list::{parse_uuid, TargetLabel, TargetList};
-use crate::node::java_double;
-use crate::npc::NpcId;
-use crate::registry::Registry;
-use crate::view::EntityView;
+use crate::sentinel_core::data::{Location, SentinelData, ATTACK_RATE_MAX, HEAL_RATE_MAX};
+use crate::sentinel_core::list::{parse_uuid, TargetLabel, TargetList};
+use crate::sentinel_core::node::java_double;
+use crate::sentinel_core::npc::NpcId;
+use crate::sentinel_core::registry::Registry;
+use crate::sentinel_core::view::EntityView;
 
 /// `SentinelCommand.prefixGood` / `prefixBad` / `colorEmphasis` / `colorBasic`.
 const GOOD: &str = "\u{a7}2[Sentinel] \u{a7}e";
@@ -46,6 +46,8 @@ pub enum Effect {
     Reload,
     /// The settings changed: save the NPC.
     Dirty(NpcId),
+    /// Open the drops menu of the NPC for the sender (`/sentinel drops`, `SentinelHealthCommands.drops`).
+    OpenDrops(NpcId),
     /// Set the body's health to its new maximum.
     Health(NpcId, f64),
     /// `npc.setProtected` (`SentinelTrait.setInvincible`).
@@ -113,8 +115,8 @@ fn allowed(sender: &Sender, look: &dyn Lookup, node: &str, default_level: u8) ->
 
 /// Every permission node defaults to operators: `sentinel.*` has `default: op` in the real
 /// plugin.yml and its children are granted through it (`npc.select` and `citizens.admin` are
-/// Citizens' and default to operators too).
-const NODE_LEVEL: u8 = 2;
+/// Citizens' and default to operators too). Bukkit's `op` is any operator, so the lowest level.
+pub const NODE_LEVEL: u8 = 1;
 
 /// One subcommand as its `@Command` annotation declares it. `min` and `max` count the arguments
 /// including the subcommand word itself (`argsLength()`).
@@ -197,7 +199,7 @@ pub const SUBCOMMANDS: &[Sub] = &[
 ];
 
 /// The permission node of a subcommand, as the `permission` of its `@Command` names it.
-fn sub_node(sub: &str) -> String {
+pub fn sub_node(sub: &str) -> String {
     match sub {
         "stats" | "targets" | "ignores" | "avoids" => "sentinel.info".into(),
         "greeting" | "warning" | "greetrange" | "greetrate" => "sentinel.greet".into(),
@@ -297,6 +299,25 @@ fn split_flags<'a>(raw: &[&'a str]) -> (Vec<&'a str>, Option<&'a str>) {
         i += 1;
     }
     (words, id)
+}
+
+/// The words after `/sentinel ` of a command line with the last (possibly empty) word being typed; None when
+/// the line is not `/sentinel ` followed by something (`onTabComplete` fires for `args.length == 2` with an
+/// empty second word as well).
+pub fn tab_args(line: &str) -> Option<Vec<String>> {
+    let rest = line.trim_start_matches('/').strip_prefix("sentinel ")?;
+    Some(rest.split(' ').map(str::to_owned).collect())
+}
+
+/// The subcommand names that start with `prefix` and whose node `may` run (Citizens completes its command
+/// modifiers the sender has the permission for).
+pub fn subcommand_names(prefix: &str, may: impl Fn(&str) -> bool) -> Vec<String> {
+    let low = prefix.to_lowercase();
+    SUBCOMMANDS
+        .iter()
+        .filter(|s| s.name.starts_with(&low) && may(&sub_node(s.name)))
+        .map(|s| s.name.to_owned())
+        .collect()
 }
 
 /// Runs `/sentinel <args>` (without the command name).
@@ -590,7 +611,7 @@ pub fn run(reg: &mut Registry, sender: &Sender, args: &str, look: &dyn Lookup) -
             if !has {
                 let calc = if body.is_some() {
                     let worn = body.as_ref().map(|b| b.armor.clone()).unwrap_or_default();
-                    format!("{BASIC} Calculated: {EMPH}{}", java_double(crate::combat::armor(d, &worn)))
+                    format!("{BASIC} Calculated: {EMPH}{}", java_double(crate::sentinel_core::combat::armor(d, &worn)))
                 } else {
                     String::new()
                 };
@@ -965,7 +986,7 @@ pub fn run(reg: &mut Registry, sender: &Sender, args: &str, look: &dyn Lookup) -
             if sender.player.is_none() {
                 out.bad("Players only!");
             } else {
-                out.bad("The drops menu is not available yet; edit `drops` in the NPC's saves.");
+                out.effects.push(Effect::OpenDrops(npc));
             }
         }
         "spawnpoint" | "avoidreturnpoint" => {
@@ -1044,7 +1065,7 @@ fn owner_text(look: &dyn Lookup, npc: NpcId) -> String {
 /// NPC (the original does write it, as a side effect of a lookup).
 fn calculated_damage(d: &SentinelData, body: Option<&EntityView>) -> f64 {
     let mut copy = d.clone();
-    crate::combat::damage(&mut copy, true, body.and_then(|b| b.main_hand.as_ref()))
+    crate::sentinel_core::combat::damage(&mut copy, true, body.and_then(|b| b.main_hand.as_ref()))
 }
 
 /// A command that shows, or sets, one number: no argument shows `show: value`, a number that
@@ -1165,7 +1186,7 @@ fn info(out: &mut Outcome, full_name: &str, d: &SentinelData, body: Option<&Enti
     };
     let calc_damage = calculated_damage(d, body);
     let armor = match body {
-        Some(b) => format!("{}{BASIC} Calculated: {EMPH}{}", java_double(d.armor), java_double(crate::combat::armor(d, &b.armor))),
+        Some(b) => format!("{}{BASIC} Calculated: {EMPH}{}", java_double(d.armor), java_double(crate::sentinel_core::combat::armor(d, &b.armor))),
         None => java_double(d.armor),
     };
     let health = match body {
@@ -1250,8 +1271,19 @@ fn info(out: &mut Outcome, full_name: &str, d: &SentinelData, body: Option<&Enti
 /// `addignore` and `addavoid` (prefixes, type names, `helditem:` ... with `name:` and `lore:`)
 /// and of `removetarget`, `removeignore` and `removeavoid` (what the NPC's list holds), for an
 /// NPC that is a Sentinel. `args` are the words after `/sentinel`, the last the one being typed.
-/// None: not this command's business (the subcommand names come from the command tree).
-/// GAP: the item prefixes complete `lore:` and `name:` only; Bukkit adds every material name.
+/// None: not this command's business (the subcommand names are `subcommand_names`).
+/// The item prefixes complete `lore:`, `name:` and every item name (`set_materials`).
+static MATERIALS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+/// The item names the item prefixes complete (the glue fills them from the item registry once).
+pub fn set_materials(names: Vec<String>) {
+    let _ = MATERIALS.set(names);
+}
+
+pub fn materials() -> &'static [String] {
+    MATERIALS.get().map_or(&[], Vec::as_slice)
+}
+
 pub fn tab_complete(reg: &Registry, selected: Option<NpcId>, args: &[String]) -> Option<Vec<String>> {
     if args.len() != 2 {
         return None;
@@ -1268,7 +1300,8 @@ pub fn tab_complete(reg: &Registry, selected: Option<NpcId>, args: &[String]) ->
                 if colon + 1 < low.len() {
                     let prefix = &low[..colon];
                     if ["helditem", "offhand", "equipped", "in_inventory"].contains(&prefix) {
-                        let items = vec![format!("{prefix}:lore:"), format!("{prefix}:name:")];
+                        let mut items = vec![format!("{prefix}:lore:"), format!("{prefix}:name:")];
+                        items.extend(materials().iter().map(|m| format!("{prefix}:{m}")));
                         return Some(filter(items, &low));
                     }
                 }
@@ -1285,7 +1318,7 @@ pub fn tab_complete(reg: &Registry, selected: Option<NpcId>, args: &[String]) ->
                 .iter()
                 .map(|p| (*p).to_owned()),
             );
-            all.extend(crate::target::all_accepted_names());
+            all.extend(crate::sentinel_core::target::all_accepted_names());
             Some(filter(all, &low))
         }
         "removetarget" => Some(filter(s.data.all_targets.removable_strings(), &args[1])),
@@ -1298,7 +1331,7 @@ pub fn tab_complete(reg: &Registry, selected: Option<NpcId>, args: &[String]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::Node;
+    use crate::sentinel_core::node::Node;
 
     struct Look;
     impl Lookup for Look {
@@ -1364,6 +1397,19 @@ mod tests {
     }
 
     #[test]
+    fn drops_opens_the_menu_for_players_only() {
+        let mut r = reg();
+        let o = run(&mut r, &op(), "drops", &Look);
+        assert!(o.effects.contains(&Effect::OpenDrops(60)));
+        assert!(!o.effects.iter().any(|e| matches!(e, Effect::Dirty(_))));
+        let console = Sender { player: None, op_level: 4, selected: Some(60) };
+        let o = run(&mut r, &console, "drops", &Look);
+        assert_eq!(o.lines.len(), 1);
+        assert!(o.lines[0].ends_with("Players only!"));
+        assert!(o.effects.is_empty());
+    }
+
+    #[test]
     fn id_flag_and_ownership() {
         let mut r = reg();
         let stranger = Sender { player: Some(77), op_level: 0, selected: None };
@@ -1378,6 +1424,38 @@ mod tests {
         assert!(o.effects.contains(&Effect::Health(60, 25.0)));
         let o = run(&mut r, &owner, "health 25 --id x", &Look);
         assert!(o.lines[0].contains("ID input is invalid (not an integer)!"));
+    }
+
+    #[test]
+    fn a_level_one_operator_may_use_sentinel() {
+        let mut r = reg();
+        let op1 = Sender { player: Some(9), op_level: 1, selected: Some(60) };
+        run(&mut r, &op1, "deathxp 7", &Look);
+        assert_eq!(r.sentinels[&60].data.death_xp, 7);
+        let none = Sender { player: Some(9), op_level: 0, selected: Some(60) };
+        let o = run(&mut r, &none, "deathxp 8", &Look);
+        assert!(o.lines[0].contains("do not have permission"));
+    }
+
+    #[test]
+    fn tab_args_keep_the_empty_word_being_typed() {
+        assert_eq!(tab_args("sentinel addtarget "), Some(vec!["addtarget".to_owned(), "".to_owned()]));
+        assert_eq!(tab_args("/sentinel "), Some(vec!["".to_owned()]));
+        assert_eq!(tab_args("sentinel removetarget pl"), Some(vec!["removetarget".to_owned(), "pl".to_owned()]));
+        assert_eq!(tab_args("sentinel"), None);
+        assert_eq!(tab_args("other addtarget "), None);
+        let r = reg();
+        let c = tab_complete(&r, Some(60), &tab_args("sentinel addtarget ").unwrap()).unwrap();
+        assert!(c.contains(&"player:".to_owned()), "{c:?}");
+    }
+
+    #[test]
+    fn subcommand_names_follow_the_prefix_and_the_permission() {
+        let all = subcommand_names("", |_| true);
+        assert_eq!(all.len(), SUBCOMMANDS.len());
+        assert_eq!(subcommand_names("addt", |_| true), vec!["addtarget".to_owned()]);
+        assert_eq!(subcommand_names("ADDT", |_| true), vec!["addtarget".to_owned()]);
+        assert!(subcommand_names("addt", |node| node != "sentinel.addtarget").is_empty());
     }
 
     #[test]

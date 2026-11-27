@@ -83,6 +83,10 @@ pub struct EntityView {
     /// A mob's current target: Some(true) when angry, Some(false) when not, None for no mob.
     pub mob_has_target: Option<bool>,
     pub invisible_effect: bool,
+    /// Active potion effects by short id (`speed`, `strength`), for `potion:` targets.
+    pub potions: Vec<String>,
+    /// For an NPC: the view of its owner when that player is online (`npc_owned_by:` targets).
+    pub owner_view: Option<Box<EntityView>>,
     pub glowing: bool,
     pub sprinting: bool,
 }
@@ -99,7 +103,7 @@ impl EntityView {
     }
     /// What `entityname:` patterns match: the custom name, else the type name.
     pub fn entity_name(&self) -> String {
-        self.custom_name.clone().unwrap_or_else(|| crate::target::bukkit_type_name(&self.kind))
+        self.custom_name.clone().unwrap_or_else(|| crate::sentinel_core::target::bukkit_type_name(&self.kind))
     }
     /// `SentinelUtilities.isInvisible`: an invisibility effect and nothing in either hand (armor
     /// is ignored, as in Sentinel).

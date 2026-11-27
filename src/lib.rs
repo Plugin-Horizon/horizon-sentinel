@@ -5,33 +5,39 @@
 //!
 //! Every `TODO(arismoko-api: ...)` names a host method arismoko lacks, and what is lost meanwhile.
 //! `VERIFY` marks a signature read from a hook declaration or doc rather than from compiled code.
+
+pub mod sentinel_core;
 use citizens::api;
 use citizens::npc::Location as CitLocation;
 use citizens::yaml::{Node as CitNode, Style};
 use mod_api::{
     ClipBlock, ClipFluid, Command, CommandArgumentValue, CommandSource, Compound, Config,
     ConfigKind, ConfigLoadingEvent, ConfigReloadingEvent, EntityRef, EquipmentSlot, Flow, Hand,
-    HostSide, Hooks, Identifier, ItemStack, LevelRandomHost, LevelRef, LevelTickPostEvent,
-    LivingDamagePreEvent, LivingDeathEvent, LivingDropsEvent, LivingIncomingDamageEvent,
-    LivingKnockbackEvent, LivingRef, MobRef, PlayerRef, RegisterCommandsEvent, RegisterConfigsEvent,
-    RunModCommandEvent, ServerChatEvent, ServerHost, ServerStoppingEvent, ServerTickEvent,
-    ServerTickPhase, SoundSource, Suggestion, TabCompleteEvent, Tag, Text,
+    HostSide, Hooks, Identifier, ItemDrop, ItemPlace, ItemStack, LevelRandomHost, LevelRef,
+    LevelTickPostEvent, LivingDamagePreEvent, LivingDeathEvent, LivingDropsEvent,
+    LivingIncomingDamageEvent, LivingKnockbackEvent, LivingRef, MenuClosedEvent, MenuReplace, MobRef,
+    NodeDefault, PermissionGatherNodesEvent,
+    PermissionLevel, PermissionNode, PermissionValueType, PlayerRef, RegisterNodeCommandsEvent,
+    RegisterConfigsEvent, RunModCommandEvent, ServerChatEvent, ServerHost, ServerStoppingEvent,
+    ServerTickEvent, ServerTickPhase, SoundSource, Suggestion, TabCompleteEvent, Tag, Text,
 };
-use sentinel_core::combat::HitDecision;
-use sentinel_core::commands::{self, Effect, Sender};
-use sentinel_core::data::Location;
-use sentinel_core::node::Node;
-use sentinel_core::npc::{NpcBridge, NpcId, TRAIT_NAME};
-use sentinel_core::registry::DeathOutcome;
-use sentinel_core::view::{EntityView, GameMode, ItemView, NpcInfo, Vec3};
-use sentinel_core::world::{Projectile, World};
+use crate::sentinel_core::combat::HitDecision;
+use crate::sentinel_core::commands::{self, Effect, Sender};
+use crate::sentinel_core::data::{DropItem, Location};
+use crate::sentinel_core::node::Node;
+use crate::sentinel_core::npc::{NpcBridge, NpcId, TRAIT_NAME};
+use crate::sentinel_core::registry::DeathOutcome;
+use crate::sentinel_core::view::{EntityView, GameMode, ItemView, NpcInfo, Vec3};
+use crate::sentinel_core::world::{Projectile, World};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 
-const ID: &str = sentinel_core::MOD_ID;
+const ID: &str = crate::sentinel_core::MOD_ID;
 /// Sentinel's own config in the server folder, read instead of the TOML whenever it exists.
 const ORIGINAL_CONFIG: &str = "plugins/Sentinel/config.yml";
+/// The Citizens selection key of the console: `u128::MAX`, which no player UUID can be.
+const CONSOLE_SELECTION: u128 = u128::MAX;
 
 fn log(line: &str) {
     eprintln!("[sentinel] {line}");
@@ -51,9 +57,12 @@ static VIEWS: Mutex<BTreeMap<i32, EntityView>> = Mutex::new(BTreeMap::new());
 /// The amount a Sentinel victim's hit comes to by Sentinel's armor rule, for `living_damage_pre`.
 static FINAL_DAMAGE: Mutex<Vec<(i32, f32, Instant)>> = Mutex::new(Vec::new());
 /// Death outcomes waiting for the dying entity's drop roll (`living_death` -> `living_drops`).
-static DEATHS: Mutex<Vec<(u32, DeathOutcome)>> = Mutex::new(Vec::new());
+/// The body's position is kept with it, where its own drops appear.
+static DEATHS: Mutex<Vec<(u32, DeathOutcome, [f64; 3])>> = Mutex::new(Vec::new());
 /// Arrows a Sentinel shot: dimension, entity id, the game time they are removed at.
 static ARROWS: Mutex<Vec<(String, u32, i64)>> = Mutex::new(Vec::new());
+/// The drops menus open now (`/sentinel drops`).
+static DROP_MENUS: Mutex<Vec<DropMenu>> = Mutex::new(Vec::new());
 
 fn view(id: i32) -> Option<EntityView> {
     lock(&VIEWS).get(&id).cloned()
@@ -86,20 +95,29 @@ fn take_final_damage(victim: i32) -> Option<f32> {
     Some(f.remove(i).1)
 }
 
-fn note_death(entity: u32, outcome: DeathOutcome) {
+fn note_death(entity: u32, outcome: DeathOutcome, at: [f64; 3]) {
     let mut d = lock(&DEATHS);
-    d.retain(|(e, _)| *e != entity);
-    d.push((entity, outcome));
+    d.retain(|(e, _, _)| *e != entity);
+    d.push((entity, outcome, at));
     // A death whose loot never rolled (removed without drops) must not pile up.
     if d.len() > 64 {
         d.remove(0);
     }
 }
 
-fn take_death(entity: u32) -> Option<DeathOutcome> {
+fn take_death(entity: u32) -> Option<(DeathOutcome, [f64; 3])> {
     let mut d = lock(&DEATHS);
-    let i = d.iter().position(|(e, _)| *e == entity)?;
-    Some(d.remove(i).1)
+    let i = d.iter().position(|(e, _, _)| *e == entity)?;
+    let (_, outcome, at) = d.remove(i);
+    Some((outcome, at))
+}
+
+/// A stack of `count` of the item `id` (`minecraft:bread`), or none for an id the registry lacks.
+fn drop_stack(host: &dyn ServerHost, id: &str, count: u32) -> Option<ItemStack> {
+    let key = host.item_key(&Identifier::parse(id).ok()?)?;
+    let mut stack = ItemStack::of(key);
+    stack.set_count(count).ok()?;
+    Some(stack)
 }
 
 /// Whether Citizens has its registry up (it does once the world is open, even with no NPCs).
@@ -179,7 +197,7 @@ impl NpcBridge for CitizensBridge {
     fn owner(&self, npc: NpcId) -> Option<u128> {
         // The `owner` trait (`traits.owner.uuid`). GAP in horizon-citizens' api: no `owner(id)`.
         let data = from_citizens(&api::trait_data(npc, "owner")?);
-        sentinel_core::list::parse_uuid(data.str("uuid")?)
+        crate::sentinel_core::list::parse_uuid(data.str("uuid")?)
     }
     fn is_spawned(&self, npc: NpcId) -> bool {
         api::entity_of(npc).is_some()
@@ -268,7 +286,7 @@ fn build_views(host: &mut dyn ServerHost, level: LevelRef, dim: &str, bridge: &C
     let mut out = Vec::new();
     for entity in level.all_entities(&*host).unwrap_or_default() {
         let Some(living) = host.living(entity) else { continue };
-        let Some(kind) = entity.kind(&*host) else { continue };
+        let Some(kind) = entity.kind(&*host).map(|k| k.id(&*host)) else { continue };
         let id = entity.id() as i32;
         let uuid = entity.uuid(&mut *host).unwrap_or(0);
         let pos = entity.position(&*host).unwrap_or([0.0; 3]);
@@ -280,7 +298,7 @@ fn build_views(host: &mut dyn ServerHost, level: LevelRef, dim: &str, bridge: &C
         let npc = bridge.npc_of_entity(id).map(|n| NpcInfo {
             id: n,
             name: bridge.name(n).unwrap_or_default(),
-            sentinel: sentinel_core::registry().is_sentinel(n),
+            sentinel: crate::sentinel_core::registry().is_sentinel(n),
         });
         let armor = ARMOR_SLOTS
             .map(|slot| living.equipment(&*host, slot).as_ref().and_then(|s| item_view(&*host, s)));
@@ -306,6 +324,12 @@ fn build_views(host: &mut dyn ServerHost, level: LevelRef, dim: &str, bridge: &C
             mob_has_target: mob.map(|m| m.target(&*host).is_some()),
             // The Invisible effect, read as the entity's invisible flag.
             invisible_effect: entity.is_invisible(&*host).unwrap_or(false),
+            potions: living
+                .effects(&*host)
+                .unwrap_or_default()
+                .iter()
+                .map(|e| e.id.id(&*host).trim_start_matches("minecraft:").to_owned())
+                .collect(),
             glowing: entity.glowing(&*host).unwrap_or(false),
             npc,
             main_hand: living.hand_item(&*host, Hand::Main).as_ref().and_then(|s| item_view(&*host, s)),
@@ -320,6 +344,16 @@ fn build_views(host: &mut dyn ServerHost, level: LevelRef, dim: &str, bridge: &C
             ..Default::default()
         };
         out.push(v);
+    }
+    // An NPC's owner, when online, for `npc_owned_by:` targets.
+    let owners: Vec<(usize, u128)> = out
+        .iter()
+        .enumerate()
+        .filter_map(|(i, v)| Some((i, bridge.owner(v.npc.as_ref()?.id)?)))
+        .collect();
+    for (i, owner) in owners {
+        let view = out.iter().find(|v| v.is_player() && v.uuid == owner).cloned();
+        out[i].owner_view = view.map(Box::new);
     }
     out
 }
@@ -503,19 +537,19 @@ impl World for Body<'_> {
     }
 
     fn push(&mut self, target: &EntityView, velocity: Vec3) {
-        // A player is pushed by setting their velocity to the one Sentinel computed (what `push` adds up to
-        // for everything else, the delta being `velocity - target.velocity`).
-        if target.kind == "minecraft:player" && target.npc.is_none() {
-            if let Some(p) = player_by_uuid(&*self.host, target.uuid) {
-                let _ = p.set_velocity(&mut *self.host, velocity);
-            }
-            return;
-        }
+        // Horizon main has no player velocity setter (`entity_set_velocity` refuses players), so a player is
+        // pushed by the same delta as everything else: `velocity - target.velocity`.
         let delta = [
             velocity[0] - target.velocity[0],
             velocity[1] - target.velocity[1],
             velocity[2] - target.velocity[2],
         ];
+        if target.kind == "minecraft:player" && target.npc.is_none() {
+            if let Some(p) = player_by_uuid(&*self.host, target.uuid) {
+                let _ = p.entity().push(&mut *self.host, delta);
+            }
+            return;
+        }
         if let Some(e) = entity_by_id(&*self.host, target.id) {
             let _ = e.push(&mut *self.host, delta);
         }
@@ -561,7 +595,7 @@ impl World for Body<'_> {
         // A timed effect; there is no host method for it, so the command does it.
         let line = format!(
             "effect give {} minecraft:glowing {} 1",
-            sentinel_core::list::format_uuid(target.uuid),
+            crate::sentinel_core::list::format_uuid(target.uuid),
             (ticks / 20).max(1)
         );
         let _ = self.host.commands().run_command(&line);
@@ -608,6 +642,8 @@ struct Look<'g> {
     host: &'g dyn ServerHost,
     bridge: &'g CitizensBridge,
     level_name: String,
+    /// The sender's answer to every Sentinel node, read before the command runs (a query needs `&mut` host).
+    granted: Option<(u128, BTreeMap<String, bool>)>,
 }
 
 impl commands::Lookup for Look<'_> {
@@ -632,10 +668,13 @@ impl commands::Lookup for Look<'_> {
     }
     /// The provider's answer for the node (`permission_value`), else the operator level against the node's
     /// default. None for an offline sender, so the sender's own level decides.
-    fn grants(&self, player: u128, node: &str, default_level: u8) -> Option<bool> {
-        let p = player_by_uuid(self.host, player)?;
-        let level = p.permission_level(self.host).unwrap_or(0);
-        Some(p.permission_value(self.host, node).unwrap_or(level >= default_level))
+    fn grants(&self, player: u128, node: &str, _default_level: u8) -> Option<bool> {
+        let (uuid, answers) = self.granted.as_ref()?;
+        if *uuid != player {
+            return None;
+        }
+        // An undeclared node or an unknown player is a denial, never a grant.
+        Some(answers.get(node).copied().unwrap_or(false))
     }
     /// `Material.valueOf(name.toUpperCase())` succeeds: the name is a bare registry item (`stick`, not
     /// `minecraft:stick`, which is no Bukkit material name). The host holds the item registry.
@@ -666,6 +705,115 @@ fn level_name() -> String {
         .unwrap_or_else(|| "world".into())
 }
 
+/// Every permission node Sentinel asks about: `sentinel.basic`, Citizens' `npc.select` and `citizens.admin`,
+/// and one `sentinel.<sub>` per subcommand (`commands::sub_node`).
+/// `sentinel.basic`, the node the command itself asks.
+fn basic_node() -> PermissionNode {
+    PermissionNode::new("sentinel.basic", PermissionValueType::Boolean)
+}
+
+fn sentinel_node_names() -> Vec<String> {
+    let mut names = vec!["sentinel.basic".to_owned(), "npc.select".to_owned(), "citizens.admin".to_owned()];
+    names.extend(commands::SUBCOMMANDS.iter().map(|s| commands::sub_node(s.name)));
+    names
+}
+
+/// The sender's answer to every Sentinel node. A refused query (no such player, undeclared node) is a denial.
+fn sentinel_grants(host: &mut dyn ServerHost, uuid: u128) -> Option<(u128, BTreeMap<String, bool>)> {
+    let p = player_by_uuid(&*host, uuid)?;
+    let mut answers = BTreeMap::new();
+    for name in sentinel_node_names() {
+        let node = PermissionNode::new(name.clone(), PermissionValueType::Boolean);
+        let answer = p.permission_bool(&mut *host, &node).unwrap_or(false);
+        answers.insert(name, answer);
+    }
+    Some((uuid, answers))
+}
+
+/// Slots of a drops menu: Sentinel's chest of four rows (`9 * 4`).
+const DROP_MENU_ROWS: u8 = 4;
+const DROP_MENU_SLOTS: usize = 36;
+
+/// A drops menu a player has open: its window and the NPC whose drops it edits. `seen` is what the
+/// menu showed at the last sync (item id and amount per stack), so only a change is written back.
+#[derive(Clone)]
+struct DropMenu {
+    uuid: u128,
+    window: i32,
+    npc: NpcId,
+    seen: Vec<(String, u32)>,
+}
+
+/// The item id and amount of each stack, the part a menu can change.
+fn stack_keys(host: &dyn ServerHost, stacks: &[ItemStack]) -> Vec<(String, u32)> {
+    stacks.iter().map(|s| (s.item().id(host), s.count())).collect()
+}
+
+/// Opens the drops menu of `npc` for `uuid` (`/sentinel drops`), showing the NPC's drops in list order.
+/// An item the registry lacks keeps no slot, as it has no stack to show.
+fn open_drops_menu(host: &mut dyn ServerHost, uuid: u128, npc: NpcId) {
+    let drops = crate::sentinel_core::registry().get_mut(npc).map(|s| s.data.drops.clone()).unwrap_or_default();
+    let items: Vec<Option<ItemStack>> = drops
+        .iter()
+        .filter_map(DropItem::from_node)
+        .take(DROP_MENU_SLOTS)
+        .map(|d| drop_stack(&*host, &d.id, d.count))
+        .collect();
+    let shown: Vec<ItemStack> = items.iter().flatten().cloned().collect();
+    let seen = stack_keys(&*host, &shown);
+    let title = Text::literal(format!("Sentinel {npc}"));
+    lock(&DROP_MENUS).retain(|m| m.uuid != uuid);
+    match host.open_menu(uuid, DROP_MENU_ROWS, title, items, MenuReplace::CloseFirst) {
+        Ok(Some(window)) => lock(&DROP_MENUS).push(DropMenu { uuid, window, npc, seen }),
+        _ => log(&format!("the drops menu of NPC {npc} could not be opened")),
+    }
+}
+
+/// Writes what the open drops menus show back to their NPCs, once a stack changed. The menu closing
+/// carries no contents, so every server tick reads them: a close keeps the last tick's read. Entries
+/// that keep their item and amount keep their saved fields (lore, name); a changed stack is saved as
+/// Bukkit writes a plain one.
+fn sync_drop_menus(host: &mut dyn ServerHost) {
+    let menus: Vec<DropMenu> = lock(&DROP_MENUS).to_vec();
+    for menu in menus {
+        let Some(open) = host.menu(menu.uuid, menu.window) else {
+            lock(&DROP_MENUS).retain(|m| m.uuid != menu.uuid || m.window != menu.window);
+            continue;
+        };
+        let mut stacks: Vec<ItemStack> = Vec::new();
+        for slot in 0..DROP_MENU_SLOTS {
+            if let Some(stack) = (ItemPlace::MenuSlot { menu: open, slot }).stack(&mut *host) {
+                stacks.push(stack);
+            }
+        }
+        let now = stack_keys(&*host, &stacks);
+        if now == menu.seen {
+            continue;
+        }
+        {
+            let mut reg = crate::sentinel_core::registry();
+            let Some(s) = reg.get_mut(menu.npc) else { continue };
+            let old = s.data.drops.clone();
+            let next: Vec<Node> = now
+                .iter()
+                .enumerate()
+                .map(|(i, (id, count))| {
+                    let kept = old
+                        .get(i)
+                        .filter(|n| DropItem::from_node(*n).is_some_and(|d| d.id == *id && d.count == *count));
+                    kept.cloned().unwrap_or_else(|| DropItem::plain_node(id, *count))
+                })
+                .collect();
+            s.data.drops = next;
+        }
+        if let Some(m) = lock(&DROP_MENUS).iter_mut().find(|m| m.uuid == menu.uuid && m.window == menu.window) {
+            m.seen = now;
+        }
+        let mut bridge = CitizensBridge;
+        bridge.mark_dirty(menu.npc);
+    }
+}
+
 /// Runs `/sentinel <args>` for a player (or the console when `player` is None) and carries out what
 /// it asks; returns the lines to show.
 fn sentinel_command(host: &mut dyn ServerHost, player: Option<u128>, op_level: u8, args: &str) -> Vec<String> {
@@ -673,10 +821,13 @@ fn sentinel_command(host: &mut dyn ServerHost, player: Option<u128>, op_level: u
     if !library_ready() {
         return vec!["\u{a7}2[Sentinel] \u{a7}cNo NPC library is loaded (Sentinel needs Citizens).".into()];
     }
-    let sender = Sender { player, op_level, selected: player.and_then(|p| bridge.selected(p)) };
+    // The console's own Citizens selection sits under the key `CONSOLE_SELECTION` (Citizens' `skey`).
+    let selected = bridge.selected(player.unwrap_or(CONSOLE_SELECTION));
+    let sender = Sender { player, op_level, selected };
+    let granted = player.and_then(|p| sentinel_grants(&mut *host, p));
     let out = {
-        let look = Look { host: &*host, bridge: &bridge, level_name: level_name() };
-        let mut reg = sentinel_core::registry();
+        let look = Look { host: &*host, bridge: &bridge, level_name: level_name(), granted };
+        let mut reg = crate::sentinel_core::registry();
         commands::run(&mut reg, &sender, args, &look)
     };
     let mut bridge = CitizensBridge;
@@ -698,8 +849,13 @@ fn sentinel_command(host: &mut dyn ServerHost, player: Option<u128>, op_level: u
                 }
             }
             Effect::Respawn(npc) => {
-                let at = sentinel_core::registry().respawn_point(*npc, &bridge);
+                let at = crate::sentinel_core::registry().respawn_point(*npc, &bridge);
                 bridge.spawn(*npc, at.as_ref());
+            }
+            Effect::OpenDrops(npc) => {
+                if let Some(uuid) = player {
+                    open_drops_menu(host, uuid, *npc);
+                }
             }
             // The config file is read again on its own within a second of a save.
             Effect::Reload => {}
@@ -720,12 +876,12 @@ const USAGES: [&str; 2] = ["sentinel", "sentinel <args:text>"];
 fn read_config(text: &str) {
     match std::fs::read_to_string(ORIGINAL_CONFIG) {
         Ok(original) => {
-            if let Err(e) = sentinel_core::load_sentinel_yaml(&original) {
+            if let Err(e) = crate::sentinel_core::load_sentinel_yaml(&original) {
                 log(&format!("{ORIGINAL_CONFIG} not read, keeping the old config: {e}"));
             }
         }
         Err(_) => {
-            if let Err(e) = sentinel_core::load_config(text) {
+            if let Err(e) = crate::sentinel_core::load_config(text) {
                 log(&format!("config not read, keeping the old one: {e}"));
             }
         }
@@ -762,10 +918,10 @@ fn level_tick(host: &mut dyn ServerHost, level: LevelRef) {
     let dim = level.dimension_id().to_owned();
     let now = level.game_time(&*host).unwrap_or(0);
     expire_arrows(host, &dim, now);
-    if sentinel_core::registry().sentinels.is_empty() {
+    if crate::sentinel_core::registry().sentinels.is_empty() {
         return;
     }
-    let notices = std::mem::take(&mut sentinel_core::registry().notices);
+    let notices = std::mem::take(&mut crate::sentinel_core::registry().notices);
     for (player, line) in notices {
         if let Some(p) = player_by_uuid(&*host, player) {
             let _ = p.tell(&mut *host, Text::literal(line));
@@ -777,9 +933,9 @@ fn level_tick(host: &mut dyn ServerHost, level: LevelRef) {
     let mut bridge = CitizensBridge;
     let views = build_views(&mut *host, level, &dim, &bridge);
     cache_views(&dim, &views);
-    let due = sentinel_core::registry().tick(&mut bridge, Some(dim.as_str()));
+    let due = crate::sentinel_core::registry().tick(&mut bridge, Some(dim.as_str()));
     let (los_traces, arrow_cleanup) = {
-        let reg = sentinel_core::registry();
+        let reg = crate::sentinel_core::registry();
         (reg.cfg.random.enhance_los_traces, reg.cfg.random.arrow_cleanup_time)
     };
     for &npc in &due {
@@ -792,14 +948,14 @@ fn level_tick(host: &mut dyn ServerHost, level: LevelRef) {
             allow_ai(&mut *host, mob);
         }
         let fresh = {
-            let mut reg = sentinel_core::registry();
+            let mut reg = crate::sentinel_core::registry();
             if reg.is_new_body(npc, me.uuid) { reg.spawned(npc, &me) } else { None }
         };
         if let Some((_, invincible)) = fresh {
             bridge.set_protected(npc, invincible);
         }
         let guarded = {
-            let reg = sentinel_core::registry();
+            let reg = crate::sentinel_core::registry();
             let Some(sen) = reg.sentinels.get(&npc) else { continue };
             let by_player = sen.data.guarding().and_then(|u| views.iter().find(|v| v.uuid == u).cloned());
             let by_npc = (sen.data.guarded_npc >= 0)
@@ -833,13 +989,13 @@ fn level_tick(host: &mut dyn ServerHost, level: LevelRef) {
             body.set_max_health(health);
             body.set_health(health);
         }
-        sentinel_core::registry().update(npc, &me, guarded, owner, &mut body);
+        crate::sentinel_core::registry().update(npc, &me, guarded, owner, &mut body);
         // The registry is unlocked again: now the hits may run their hooks.
         for (victim, kind, amount, source) in std::mem::take(&mut body.hurts) {
             let _ = victim.hurt(&mut *host, kind, amount, None, source);
         }
     }
-    sentinel_core::registry().end_tick(&dim, !due.is_empty());
+    crate::sentinel_core::registry().end_tick(&dim, !due.is_empty());
 }
 
 // ----- the hooks -----
@@ -866,9 +1022,9 @@ fn install(st: &mut State) {
     api::subscribe(|event| {
         use citizens::NpcEvent;
         match event {
-            NpcEvent::Despawned { npc, .. } => sentinel_core::registry().despawned(*npc),
+            NpcEvent::Despawned { npc, .. } => crate::sentinel_core::registry().despawned(*npc),
             NpcEvent::Removed { npc } => {
-                sentinel_core::registry().sentinels.remove(npc);
+                crate::sentinel_core::registry().sentinels.remove(npc);
             }
             _ => {}
         }
@@ -878,7 +1034,7 @@ fn install(st: &mut State) {
 /// Loads traits Citizens has that Sentinel doesn't, attaches new ones, drops removed ones.
 fn sync(st: &mut State) {
     let with: BTreeSet<NpcId> = api::with_trait(TRAIT_NAME).into_iter().collect();
-    let mut reg = sentinel_core::registry();
+    let mut reg = crate::sentinel_core::registry();
     for &npc in &with {
         if reg.is_sentinel(npc) {
             continue;
@@ -910,7 +1066,7 @@ fn sync(st: &mut State) {
 /// Writes changed traits into Citizens' saves (stats change every tick, so every few seconds).
 fn save(st: &mut State, all: bool) {
     let dirty: BTreeSet<NpcId> = std::mem::take(&mut *lock(&DIRTY));
-    let reg = sentinel_core::registry();
+    let reg = crate::sentinel_core::registry();
     for &npc in reg.sentinels.keys() {
         if !all && !dirty.contains(&npc) && st.ticks % 100 != 0 {
             continue;
@@ -928,7 +1084,7 @@ fn save(st: &mut State, all: bool) {
 #[mod_api::horizon_mod]
 impl Hooks for Mod {
     fn register_configs(&self, _: HostSide, event: &mut RegisterConfigsEvent<'_>) {
-        event.configs.push(Config::new(ID, ConfigKind::Common, sentinel_core::DEFAULT_TOML));
+        event.configs.push(Config::new(ID, ConfigKind::Common, crate::sentinel_core::DEFAULT_TOML));
     }
 
     fn config_loading(&self, _: HostSide, event: &mut ConfigLoadingEvent<'_>) {
@@ -944,24 +1100,31 @@ impl Hooks for Mod {
         }
     }
 
-    fn register_commands(&self, _: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
-        for usage in USAGES {
-            event.commands.push(Command::new(usage));
+    fn permission_gather_nodes(&self, event: &mut PermissionGatherNodesEvent<'_>) {
+        // Operator level 1 (any operator, Bukkit's `default: op`) is the default of every Sentinel node
+        // (`NODE_LEVEL` in sentinel_core::commands).
+        for name in sentinel_node_names() {
+            let node = PermissionNode::new(name, PermissionValueType::Boolean);
+            let _ = event.nodes.add(node, NodeDefault::Level(PermissionLevel::from_level(i32::from(commands::NODE_LEVEL))));
         }
     }
 
-    /// `/sentinel` from a player or the console. Other sources (command blocks, functions) are refused.
+    fn register_node_commands(&self, _: &mut dyn ServerHost, event: &mut RegisterNodeCommandsEvent<'_>) {
+        for usage in USAGES {
+            // Hidden from, and refused to, whoever lacks `sentinel.basic` (the original command's `permission`).
+            event.commands.push(Command::op(usage, commands::NODE_LEVEL).with_node(&basic_node()));
+        }
+    }
+
+    /// `/sentinel` from a player, the console or any other source (command blocks and functions act as the
+    /// console: every permission, no selection, so they need `--id`).
     fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>) -> Flow {
         if event.command.literals.first().map(String::as_str) != Some("sentinel") {
             return Flow::Continue;
         }
         let (player, op_level) = match &event.source {
             CommandSource::Player { player, permission } => (Some(player.uuid()), permission.level()),
-            CommandSource::Console { permission } => (None, permission.level()),
-            _ => {
-                let _ = host.commands().feedback(Text::literal("Sentinel answers players and the console only."));
-                return Flow::Cancel;
-            }
+            other => (None, other.permission().level()),
         };
         let args = match event.command.argument("args") {
             Some(CommandArgumentValue::String(s)) => s.clone(),
@@ -975,15 +1138,26 @@ impl Hooks for Mod {
 
     /// `/sentinel addtarget|addignore|...` complete as Sentinel's `onTabComplete` does.
     // VERIFY: the event fields `player`, `command`, `range` and `suggestions` (native_tab_complete).
-    fn tab_complete(&self, _host: &mut dyn ServerHost, event: &mut TabCompleteEvent<'_>) {
-        let line = event.command.trim_start_matches('/');
-        let mut parts = line.splitn(2, ' ');
-        if parts.next() != Some("sentinel") {
-            return;
+    fn tab_complete(&self, host: &mut dyn ServerHost, event: &mut TabCompleteEvent<'_>) {
+        // The trailing empty word is kept: `/sentinel addtarget ` completes before a letter is typed.
+        let Some(arguments) = commands::tab_args(event.command) else { return };
+        if commands::materials().is_empty() {
+            commands::set_materials(
+                host.item_keys().iter().map(|k| k.id(&*host).trim_start_matches("minecraft:").to_owned()).collect(),
+            );
         }
-        let arguments: Vec<String> = parts.next().unwrap_or("").split_whitespace().map(str::to_owned).collect();
-        let selected = CitizensBridge.selected(event.player);
-        let words = commands::tab_complete(&sentinel_core::registry(), selected, &arguments).unwrap_or_default();
+        let words = if arguments.len() == 1 {
+            // The subcommand names the sender may use (`sentinel.basic` and the subcommand's node).
+            match sentinel_grants(host, event.player) {
+                Some((_, answers)) if answers.get("sentinel.basic").copied().unwrap_or(false) => {
+                    commands::subcommand_names(&arguments[0], |node| answers.get(node).copied().unwrap_or(false))
+                }
+                _ => Vec::new(),
+            }
+        } else {
+            let selected = CitizensBridge.selected(event.player);
+            commands::tab_complete(&crate::sentinel_core::registry(), selected, &arguments).unwrap_or_default()
+        };
         for text in words {
             event.suggestions.push(Suggestion::new((event.range[0], event.range[1]), text));
         }
@@ -991,7 +1165,7 @@ impl Hooks for Mod {
 
     fn server_chat(&self, _host: &mut dyn ServerHost, event: &mut ServerChatEvent<'_>) -> Flow {
         if let Some(player) = view_by_uuid(event.player) {
-            sentinel_core::registry().on_chat(&player, event.raw_text);
+            crate::sentinel_core::registry().on_chat(&player, event.raw_text);
         }
         Flow::Continue
     }
@@ -1006,7 +1180,7 @@ impl Hooks for Mod {
         let causing = event.source.causing;
         let attacker = if causing == 0 { None } else { view(causing) };
         let amount = event.container.new_damage();
-        let decision = sentinel_core::registry().on_hurt(
+        let decision = crate::sentinel_core::registry().on_hurt(
             &victim,
             attacker.as_ref(),
             event.source.damage_type,
@@ -1041,7 +1215,7 @@ impl Hooks for Mod {
             return Flow::Continue;
         }
         let mut seed = u64::from(entity).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
-        let outcome = sentinel_core::registry().on_death(&dead, &mut CitizensBridge, || {
+        let outcome = crate::sentinel_core::registry().on_death(&dead, &mut CitizensBridge, || {
             seed ^= seed << 13;
             seed ^= seed >> 7;
             seed ^= seed << 17;
@@ -1050,37 +1224,50 @@ impl Hooks for Mod {
         if outcome.replace_drops || outcome.xp.is_some() {
             // TODO(arismoko-api: living_experience_drop, death_message_hidden): the xp and the
             // hidden death message of the outcome are not applied (see `living_drops`).
-            note_death(entity, outcome);
+            note_death(entity, outcome, dead.pos);
         }
         Flow::Continue
     }
 
     /// The drops of a dead Sentinel (its own list) or of a Sentinel's enemy (none, with `enemy drops`
-    /// off). TODO(arismoko-api: item_key_by_id, item_from_snbt): a Sentinel's own drops (named,
-    /// with lore and enchantments) cannot be built, so the vanilla list stays for it.
-    fn living_drops(&self, _host: &mut dyn ServerHost, event: &mut LivingDropsEvent<'_>) -> Flow {
-        let Some(outcome) = take_death(event.entity as u32) else { return Flow::Continue };
-        if outcome.replace_drops && outcome.drops.is_empty() {
+    /// off). A Sentinel's own drops are placed where its body fell, picked up after 10 ticks as
+    /// Bukkit's `dropItemNaturally` leaves them. TODO(arismoko-api: item_from_snbt): the drops' names,
+    /// lore and enchantments are not built (`DropItem` keeps them, no stack writer exists yet).
+    fn living_drops(&self, host: &mut dyn ServerHost, event: &mut LivingDropsEvent<'_>) -> Flow {
+        let Some((outcome, at)) = take_death(event.entity as u32) else { return Flow::Continue };
+        if outcome.replace_drops {
             event.drops.clear();
+            for drop in &outcome.drops {
+                if let Some(stack) = drop_stack(&*host, &drop.id, drop.count) {
+                    event.drops.push(ItemDrop::new(stack, at, [0.0, 0.0, 0.0], 10));
+                }
+            }
         }
         Flow::Continue
+    }
+
+    /// A drops menu closed (the player closed it, or left): its last read was written at the tick before.
+    fn menu_closed(&self, _host: &mut dyn ServerHost, event: &mut MenuClosedEvent) {
+        let (uuid, window) = (event.uuid, event.window);
+        lock(&DROP_MENUS).retain(|m| m.uuid != uuid || m.window != window);
     }
 
     /// Sentinel's `allow knockback` off: a hit on the Sentinel pushes it nowhere.
     fn living_knockback(&self, _level: &mut dyn LevelRandomHost, event: &mut LivingKnockbackEvent<'_>) -> Flow {
         if let Some(victim) = view(event.entity) {
-            if victim.npc.is_some() && !sentinel_core::registry().allows_knockback(&victim) {
+            if victim.npc.is_some() && !crate::sentinel_core::registry().allows_knockback(&victim) {
                 event.cancelled = true;
             }
         }
         Flow::Continue
     }
 
-    fn server_tick(&self, _host: &mut dyn ServerHost, event: &mut ServerTickEvent<'_>) {
+    fn server_tick(&self, host: &mut dyn ServerHost, event: &mut ServerTickEvent<'_>) {
         let mut guard = lock_state(self);
         let st = &mut *guard;
         match event.phase {
             ServerTickPhase::ServerTickStart { world_running: true, .. } => {
+                sync_drop_menus(host);
                 // The NPC library's bridge: installs once its registry is up, syncs the traits
                 // every 5 ticks and saves changes.
                 install(st);
@@ -1096,7 +1283,7 @@ impl Hooks for Mod {
             ServerTickPhase::ServerTickEnd { world_running: true, .. } => {
                 // Respawn timers of dead Sentinels (`respawn time` > 0).
                 if library_ready() {
-                    sentinel_core::registry().tick(&mut CitizensBridge, None);
+                    crate::sentinel_core::registry().tick(&mut CitizensBridge, None);
                 }
             }
             _ => {}

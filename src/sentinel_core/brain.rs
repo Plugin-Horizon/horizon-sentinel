@@ -3,12 +3,12 @@
 //! `SentinelTargetingHelper`, `SentinelAttackHelper`, `SentinelWeaponHelper`). Translated from
 //! Sentinel (MIT, see LICENSE); Bukkit calls became [`World`] calls.
 
-use crate::combat::{self, WeaponKind};
-use crate::config::Config;
-use crate::data::SentinelData;
-use crate::list::Asker;
-use crate::view::{dist_sq, looking_towards, EntityView, Vec3};
-use crate::world::{Projectile, World};
+use crate::sentinel_core::combat::{self, WeaponKind};
+use crate::sentinel_core::config::Config;
+use crate::sentinel_core::data::SentinelData;
+use crate::sentinel_core::list::Asker;
+use crate::sentinel_core::view::{dist_sq, looking_towards, EntityView, Vec3};
+use crate::sentinel_core::world::{Projectile, World};
 use std::collections::{HashMap, HashSet};
 
 /// A target or avoid that is current (`SentinelCurrentTarget`).
@@ -331,7 +331,7 @@ impl Runtime {
         if base.by_multiple.is_empty() {
             return;
         }
-        let mut subs: Vec<(crate::list::TargetList, Vec<u128>)> =
+        let mut subs: Vec<(crate::sentinel_core::list::TargetList, Vec<u128>)> =
             base.by_multiple.iter().map(|l| (l.clone(), Vec::new())).collect();
         let pos = self.guard_zone(cx, w);
         let mut done = Vec::new();
@@ -528,7 +528,7 @@ impl Runtime {
         }
         let native_kind = cx.me.kind == "minecraft:player"
             || cx.me.kind == "minecraft:mannequin"
-            || crate::target::NATIVE_COMBAT_KINDS.contains(&cx.me.kind.as_str());
+            || crate::sentinel_core::target::NATIVE_COMBAT_KINDS.contains(&cx.me.kind.as_str());
         if cx.data.damage < 0.0 && r.do_native_attacks && native_kind && w.native_attack(e) {
             return;
         }
@@ -888,8 +888,8 @@ pub fn run_direction(center: Vec3, range: f64, threats: &[EntityView]) -> Vec3 {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::list::TargetLabel;
-    use crate::view::{GameMode, NpcInfo};
+    use crate::sentinel_core::list::TargetLabel;
+    use crate::sentinel_core::view::{GameMode, NpcInfo};
 
     /// A flat empty world with entities in it; records what the NPC did.
     #[derive(Default)]
@@ -1083,7 +1083,7 @@ pub(crate) mod tests {
         let mut data = SentinelData::default();
         TargetLabel::parse("zombie").add_to(&mut data.all_targets);
         let mut me = fighter(1, "Archer", [0.0, 64.0, 0.0]);
-        me.main_hand = Some(crate::view::ItemView::of("minecraft:bow"));
+        me.main_hand = Some(crate::sentinel_core::view::ItemView::of("minecraft:bow"));
         let zombie = body(5, "minecraft:zombie", [12.0, 64.0, 0.0]);
         let mut w = Fake { entities: vec![me.clone(), zombie], ..Default::default() };
         let mut rt = Runtime::new();

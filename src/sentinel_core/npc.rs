@@ -2,12 +2,12 @@
 //!
 //! Sentinel is a Citizens trait: Citizens owns the NPCs (ids, names, owners, bodies, saving), and
 //! Sentinel adds behaviour to those that carry its trait. On Horizon the NPC library implements
-//! [`NpcBridge`] and calls the [`crate::registry::Registry`] at the moments Citizens calls a
+//! [`NpcBridge`] and calls the [`crate::sentinel_core::registry::Registry`] at the moments Citizens calls a
 //! trait (`load`, `save`, `onAttach`, `onSpawn`, `onDespawn`, `onRemove`). See GAPS.md for what
 //! is assumed of the library.
 
-use crate::data::Location;
-use crate::view::Vec3;
+use crate::sentinel_core::data::Location;
+use crate::sentinel_core::view::Vec3;
 
 /// A Citizens NPC id (`npc.getId()`).
 pub type NpcId = i32;

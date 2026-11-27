@@ -2,15 +2,15 @@
 //! `SentinelEventHandler`): their settings and state, the updates, and what happens on hits,
 //! deaths and chat. The mod's helpers drive it from Horizon's hooks.
 
-use crate::brain::{Ctx, Runtime};
-use crate::combat::{self, HitDecision};
-use crate::config::Config;
-use crate::data::{DropItem, Location, SentinelData};
-use crate::list::Asker;
-use crate::node::Node;
-use crate::npc::{NpcBridge, NpcId};
-use crate::view::EntityView;
-use crate::world::World;
+use crate::sentinel_core::brain::{Ctx, Runtime};
+use crate::sentinel_core::combat::{self, HitDecision};
+use crate::sentinel_core::config::Config;
+use crate::sentinel_core::data::{DropItem, Location, SentinelData};
+use crate::sentinel_core::list::Asker;
+use crate::sentinel_core::node::Node;
+use crate::sentinel_core::npc::{NpcBridge, NpcId};
+use crate::sentinel_core::view::EntityView;
+use crate::sentinel_core::world::World;
 use std::collections::BTreeMap;
 
 /// One NPC with the Sentinel trait.
@@ -234,7 +234,7 @@ impl Registry {
                 }
                 for u in &adds {
                     let t = mate.data.enemy_target_time;
-                    let e = mate.rt.targets.entry(*u).or_insert(crate::brain::Current { ticks_left: t, has_los: true });
+                    let e = mate.rt.targets.entry(*u).or_insert(crate::sentinel_core::brain::Current { ticks_left: t, has_los: true });
                     e.ticks_left = t;
                 }
                 for u in &removes {
@@ -327,7 +327,7 @@ impl Registry {
                     && bridge.selected(att.uuid) == Some(v_id)
                 {
                     s.rt.shown_init_warn = true;
-                    if cx.data.all_ignores.total() == 1 && cx.data.all_ignores.targets.iter().any(|t| t == crate::target::OWNER) {
+                    if cx.data.all_ignores.total() == 1 && cx.data.all_ignores.targets.iter().any(|t| t == crate::sentinel_core::target::OWNER) {
                         self.notices.push((
                             att.uuid,
                             "\u{a7}2[Sentinel] \u{a7}eNotice: if this is your first time setting up this NPC, don't forget to use \u{a7}b/sentinel removeignore owner\u{a7}e once you're done configuring the NPC, if you want it to be able to attack you.".to_owned(),
@@ -393,7 +393,7 @@ impl Registry {
             for s in self.sentinels.values_mut() {
                 if s.data.guarding() == Some(victim.uuid) && s.data.fightback && att.uuid != s.body.unwrap_or(0) {
                     let t = s.data.enemy_target_time;
-                    let e = s.rt.targets.entry(att.uuid).or_insert(crate::brain::Current { ticks_left: t, has_los: true });
+                    let e = s.rt.targets.entry(att.uuid).or_insert(crate::sentinel_core::brain::Current { ticks_left: t, has_los: true });
                     e.ticks_left = t;
                 }
             }
@@ -475,7 +475,7 @@ impl Registry {
     pub fn kill(&mut self, npc: NpcId, body: &EntityView, bridge: &mut dyn NpcBridge) -> DeathOutcome {
         let mut b = body.clone();
         if b.npc.is_none() {
-            b.npc = Some(crate::view::NpcInfo { id: npc, name: bridge.name(npc).unwrap_or_default(), sentinel: true });
+            b.npc = Some(crate::sentinel_core::view::NpcInfo { id: npc, name: bridge.name(npc).unwrap_or_default(), sentinel: true });
         }
         self.on_death(&b, bridge, || 0.0)
     }
@@ -489,8 +489,8 @@ impl Registry {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::list::TargetLabel;
-    use crate::view::NpcInfo;
+    use crate::sentinel_core::list::TargetLabel;
+    use crate::sentinel_core::view::NpcInfo;
 
     #[derive(Default)]
     pub struct Bridge {
@@ -578,7 +578,7 @@ pub(crate) mod tests {
     fn respawn_time_zero_stays_dead() {
         let mut reg = Registry::default();
         let mut b = Bridge::default();
-        reg.load(1, &crate::node::parse_yaml("respawnTime: 0\n").unwrap());
+        reg.load(1, &crate::sentinel_core::node::parse_yaml("respawnTime: 0\n").unwrap());
         let out = reg.on_death(&npc_body(1, 11), &mut b, || 0.0);
         assert!(out.replace_drops && out.drops.is_empty());
         assert_eq!(b.flags, vec![(1, false)]);
@@ -592,7 +592,7 @@ pub(crate) mod tests {
     fn respawn_after_its_time() {
         let mut reg = Registry::default();
         let mut b = Bridge::default();
-        reg.load(1, &crate::node::parse_yaml("respawnTime: 40\n").unwrap());
+        reg.load(1, &crate::sentinel_core::node::parse_yaml("respawnTime: 40\n").unwrap());
         reg.on_death(&npc_body(1, 11), &mut b, || 0.0);
         for _ in 0..39 {
             reg.tick(&mut b, None);
@@ -622,7 +622,7 @@ pub(crate) mod tests {
     fn negative_respawn_destroys() {
         let mut reg = Registry::default();
         let mut b = Bridge::default();
-        reg.load(1, &crate::node::parse_yaml("respawnTime: -1\n").unwrap());
+        reg.load(1, &crate::sentinel_core::node::parse_yaml("respawnTime: -1\n").unwrap());
         reg.on_death(&npc_body(1, 11), &mut b, || 0.0);
         assert_eq!(b.destroyed, vec![1]);
     }
@@ -631,7 +631,7 @@ pub(crate) mod tests {
     fn protected_cancels_hits_from_ignored() {
         let mut reg = Registry::default();
         let b = Bridge::default();
-        reg.load(1, &crate::node::parse_yaml("protected: true\n").unwrap());
+        reg.load(1, &crate::sentinel_core::node::parse_yaml("protected: true\n").unwrap());
         TargetLabel::parse("player:^P$").add_to(&mut reg.sentinels.get_mut(&1).unwrap().data.all_ignores);
         let me = npc_body(1, 11);
         assert_eq!(reg.on_hurt(&me, Some(&player(7)), "minecraft:player_attack", 3.0, &b), HitDecision::Cancel);
@@ -674,7 +674,7 @@ pub(crate) mod tests {
 
     #[test]
     fn pvp_event_makes_the_attacker_a_target() {
-        use crate::brain::tests::{body, fighter, Fake};
+        use crate::sentinel_core::brain::tests::{body, fighter, Fake};
         let mut reg = Registry::default();
         let b = Bridge::default();
         reg.load(1, &Node::map());
@@ -694,10 +694,10 @@ pub(crate) mod tests {
 
     #[test]
     fn squad_mates_share_targets() {
-        use crate::brain::tests::{body, fighter, Fake};
+        use crate::sentinel_core::brain::tests::{body, fighter, Fake};
         let mut reg = Registry::default();
-        reg.load(1, &crate::node::parse_yaml("squad: red\n").unwrap());
-        reg.load(2, &crate::node::parse_yaml("squad: red\n").unwrap());
+        reg.load(1, &crate::sentinel_core::node::parse_yaml("squad: red\n").unwrap());
+        reg.load(2, &crate::sentinel_core::node::parse_yaml("squad: red\n").unwrap());
         TargetLabel::parse("zombie").add_to(&mut reg.sentinels.get_mut(&1).unwrap().data.all_targets);
         let me = fighter(1, "A", [0.0, 64.0, 0.0]);
         let z = body(30, "minecraft:zombie", [5.0, 64.0, 0.0]);
@@ -710,7 +710,7 @@ pub(crate) mod tests {
     fn invincible_takes_nothing() {
         let mut reg = Registry::default();
         let b = Bridge::default();
-        reg.load(1, &crate::node::parse_yaml("invincible: true\n").unwrap());
+        reg.load(1, &crate::sentinel_core::node::parse_yaml("invincible: true\n").unwrap());
         assert_eq!(reg.on_hurt(&npc_body(1, 11), None, "minecraft:fall", 3.0, &b), HitDecision::Cancel);
     }
 }
